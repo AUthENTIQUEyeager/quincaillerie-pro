@@ -9,7 +9,7 @@ const router = Router();
 router.use(requireAuth, requireCompany);
 
 function scope(req: any) {
-  return req.auth.role === "SUPER_ADMIN" ? {} : { companyId: req.auth.companyId };
+  return req.auth.role === "SUPER_ADMIN" ? {} : { companyId: req.auth.companyId ?? undefined };
 }
 
 async function assertStoreInCompany(req: any, storeId: string) {
@@ -25,7 +25,7 @@ router.get(
     const { storeId } = req.query as Record<string, string>;
     const where: any = {};
     if (storeId) where.storeId = storeId;
-    const companyFilter = req.auth!.role === "SUPER_ADMIN" ? {} : { companyId: req.auth!.companyId };
+    const companyFilter = req.auth!.role === "SUPER_ADMIN" ? {} : { companyId: req.auth!.companyId ?? undefined };
     const stocks = await prisma.stock.findMany({
       where: { ...where, product: companyFilter },
       include: { product: { select: { id: true, name: true, sku: true, minStock: true, unit: true, photoUrl: true } }, store: true },
@@ -42,7 +42,7 @@ router.get(
     const where: any = {};
     if (storeId) where.storeId = storeId;
     if (productId) where.productId = productId;
-    const companyFilter = req.auth!.role === "SUPER_ADMIN" ? {} : { product: { companyId: req.auth!.companyId } };
+    const companyFilter = req.auth!.role === "SUPER_ADMIN" ? {} : { product: { companyId: req.auth!.companyId ?? undefined } };
     const movements = await prisma.stockMovement.findMany({
       where: { ...where, ...companyFilter },
       include: { product: { select: { name: true, sku: true, unit: true } }, store: { select: { name: true } } },
@@ -167,7 +167,7 @@ router.post(
 router.get(
   "/inventories",
   asyncHandler(async (req, res) => {
-    const companyFilter = req.auth!.role === "SUPER_ADMIN" ? {} : { store: { companyId: req.auth!.companyId } };
+    const companyFilter = req.auth!.role === "SUPER_ADMIN" ? {} : { store: { companyId: req.auth!.companyId ?? undefined } };
     const inventories = await prisma.inventory.findMany({
       where: companyFilter,
       include: { store: true, lines: true },
@@ -236,7 +236,7 @@ router.post(
 router.get(
   "/transfers",
   asyncHandler(async (req, res) => {
-    const companyFilter = req.auth!.role === "SUPER_ADMIN" ? {} : { fromStore: { companyId: req.auth!.companyId } };
+    const companyFilter = req.auth!.role === "SUPER_ADMIN" ? {} : { fromStore: { companyId: req.auth!.companyId ?? undefined } };
     const transfers = await prisma.transfer.findMany({
       where: companyFilter,
       include: { fromStore: true, toStore: true, lines: true },

@@ -9,7 +9,7 @@ const router = Router();
 router.use(requireAuth, requireCompany);
 
 function scope(req: any) {
-  return req.auth.role === "SUPER_ADMIN" ? {} : { companyId: req.auth.companyId };
+  return req.auth.role === "SUPER_ADMIN" ? {} : { companyId: req.auth.companyId ?? undefined };
 }
 
 async function generatePurchaseNumber(companyId: string) {

@@ -7,7 +7,7 @@ const router = Router();
 router.use(requireAuth, requireCompany);
 
 function companyFilter(req: any) {
-  return req.auth.role === "SUPER_ADMIN" ? undefined : req.auth.companyId;
+  return req.auth.role === "SUPER_ADMIN" ? undefined : req.auth.companyId ?? undefined;
 }
 
 router.get(

@@ -11,7 +11,7 @@ router.get(
   "/",
   asyncHandler(async (req, res) => {
     if (!req.auth!.companyId) throw new AppError("Aucune entreprise associée.", 404);
-    const company = await prisma.company.findUnique({ where: { id: req.auth!.companyId } });
+    const company = await prisma.company.findUnique({ where: { id: req.auth!.companyId! } });
     res.json(company);
   })
 );
