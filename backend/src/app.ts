@@ -30,6 +30,10 @@ import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 export function createApp() {
   const app = express();
 
+  // Render (comme la plupart des PaaS) place l'app derrière un reverse proxy.
+  // Sans ceci, express-rate-limit lève une erreur sur l'en-tête X-Forwarded-For.
+  app.set("trust proxy", 1);
+
   app.use(helmet());
   app.use(
     cors({
