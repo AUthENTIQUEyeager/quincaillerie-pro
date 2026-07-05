@@ -11,7 +11,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "seed": "ts-node prisma/seed.ts",
-    "render:build": "npm install && prisma generate --schema=./prisma/schema.production.prisma && prisma db push --schema=./prisma/schema.production.prisma --accept-data-loss && tsc",
+    "render:build": "npm install --include=dev && prisma generate --schema=./prisma/schema.production.prisma && prisma db push --schema=./prisma/schema.production.prisma --accept-data-loss && tsc",
     "render:seed": "ts-node prisma/seed.ts"
   },
   "keywords": [],
