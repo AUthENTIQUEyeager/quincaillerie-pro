@@ -34,7 +34,14 @@ export function createApp() {
   // Sans ceci, express-rate-limit lève une erreur sur l'en-tête X-Forwarded-For.
   app.set("trust proxy", 1);
 
-  app.use(helmet());
+  app.use(
+    helmet({
+      // Autorise explicitement les requêtes cross-origin (frontend Vercel <-> API Render).
+      // Le réglage strict par défaut ("same-origin") de helmet est parfois bloqué par
+      // certains antivirus/proxys d'entreprise côté navigateur client.
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+    })
+  );
   app.use(
     cors({
       origin: process.env.CORS_ORIGIN?.split(",") || "*",
