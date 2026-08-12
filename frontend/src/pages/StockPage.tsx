@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Warehouse } from "lucide-react";
+import { Plus, Warehouse, Search } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,9 @@ export default function StockPage() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState({ productId: "", storeId: "", type: "ENTREE", quantity: 1, reason: "" });
+  // Recherche produit dans le formulaire de mouvement manuel (facilite la sélection
+  // quand le catalogue contient beaucoup de produits).
+  const [productSearch, setProductSearch] = useState("");
 
   const create = useMutation({
     mutationFn: async () => api.post("/stock/movements", form),
@@ -37,8 +40,16 @@ export default function StockPage() {
 
   function openCreate() {
     setForm({ productId: products?.[0]?.id || "", storeId: stores?.[0]?.id || "", type: "ENTREE", quantity: 1, reason: "" });
+    setProductSearch("");
     setDialogOpen(true);
   }
+
+  const filteredProducts = useMemo(() => {
+    if (!products) return [];
+    const q = productSearch.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter((p) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || p.barcode?.toLowerCase().includes(q));
+  }, [products, productSearch]);
 
   const groupedByStore = useMemo(() => {
     if (!stocks) return {};
@@ -152,10 +163,20 @@ export default function StockPage() {
           <div className="space-y-3">
             <div>
               <Label>Produit</Label>
+              <div className="relative mb-1.5">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Rechercher par nom, SKU ou code-barres..."
+                  className="h-8 pl-8 text-sm"
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                />
+              </div>
               <Select value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })}>
-                {products?.map((p) => (
+                {filteredProducts.length === 0 && <option value="">Aucun produit trouvé</option>}
+                {filteredProducts.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name}
+                    {p.name} ({p.sku})
                   </option>
                 ))}
               </Select>
