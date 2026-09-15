@@ -14,11 +14,23 @@ import { formatCurrency } from "@/lib/utils";
 import toast from "react-hot-toast";
 import type { Product, Store, Customer, Sale } from "@/types";
 
+// Les 3 tarifs disponibles à la vente, définis sur la fiche produit.
+type PriceTier = "OFFICIEL" | "REDUCTION" | "GROSSISTE";
+
 interface CartLine {
   product: Product;
   quantity: number;
   unitPrice: number;
   discount: number;
+  priceTier: PriceTier;
+}
+
+// Retourne le prix correspondant au tarif choisi ; si ce tarif n'est pas
+// renseigné sur la fiche produit, revient automatiquement au prix officiel.
+function priceForTier(product: Product, tier: PriceTier): number {
+  if (tier === "REDUCTION") return product.promoPrice ?? product.sellingPrice;
+  if (tier === "GROSSISTE") return product.wholesalePrice ?? product.sellingPrice;
+  return product.sellingPrice;
 }
 
 export default function SalesPosPage() {
@@ -43,8 +55,12 @@ export default function SalesPosPage() {
   const filteredProducts = useMemo(() => {
     if (!products) return [];
     const q = search.trim().toLowerCase();
-    if (!q) return products.slice(0, 30);
-    return products.filter((p) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || p.barcode?.toLowerCase().includes(q)).slice(0, 30);
+    const base = q
+      ? products.filter((p) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || p.barcode?.toLowerCase().includes(q))
+      : products;
+    // Produits avec le plus de stock disponible en premier.
+    const sorted = [...base].sort((a, b) => (b.totalStock ?? 0) - (a.totalStock ?? 0));
+    return sorted.slice(0, 30);
   }, [products, search]);
 
   function addToCart(product: Product) {
@@ -53,12 +69,16 @@ export default function SalesPosPage() {
       if (existing) {
         return prev.map((l) => (l.product.id === product.id ? { ...l, quantity: l.quantity + 1 } : l));
       }
-      return [...prev, { product, quantity: 1, unitPrice: product.sellingPrice, discount: 0 }];
+      return [...prev, { product, quantity: 1, unitPrice: product.sellingPrice, discount: 0, priceTier: "OFFICIEL" }];
     });
   }
 
   function updateQty(productId: string, delta: number) {
     setCart((prev) => prev.map((l) => (l.product.id === productId ? { ...l, quantity: Math.max(1, l.quantity + delta) } : l)));
+  }
+
+  function setLineTier(productId: string, tier: PriceTier) {
+    setCart((prev) => prev.map((l) => (l.product.id === productId ? { ...l, priceTier: tier, unitPrice: priceForTier(l.product, tier) } : l)));
   }
 
   function removeLine(productId: string) {
@@ -156,28 +176,39 @@ export default function SalesPosPage() {
                 </Select>
               </div>
 
-              <div className="max-h-[320px] space-y-2 overflow-y-auto scrollbar-thin">
+              <div className="max-h-[360px] space-y-2 overflow-y-auto scrollbar-thin">
                 {cart.length === 0 ? (
                   <p className="py-8 text-center text-sm text-muted-foreground">Panier vide</p>
                 ) : (
                   cart.map((l) => (
-                    <div key={l.product.id} className="flex items-center gap-2 rounded-md border border-border p-2">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">{l.product.name}</p>
-                        <p className="text-xs text-muted-foreground">{formatCurrency(l.unitPrice, currency)}</p>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Button variant="outline" size="icon" className="h-6 w-6" onClick={() => updateQty(l.product.id, -1)}>
-                          <Minus className="h-3 w-3" />
+                    <div key={l.product.id} className="space-y-1.5 rounded-md border border-border p-2">
+                      <div className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium">{l.product.name}</p>
+                          <p className="text-xs text-muted-foreground">{formatCurrency(l.unitPrice, currency)}</p>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button variant="outline" size="icon" className="h-6 w-6" onClick={() => updateQty(l.product.id, -1)}>
+                            <Minus className="h-3 w-3" />
+                          </Button>
+                          <span className="w-6 text-center text-sm tabular-nums">{l.quantity}</span>
+                          <Button variant="outline" size="icon" className="h-6 w-6" onClick={() => updateQty(l.product.id, 1)}>
+                            <Plus className="h-3 w-3" />
+                          </Button>
+                        </div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => removeLine(l.product.id)}>
+                          <Trash2 className="h-3 w-3 text-destructive" />
                         </Button>
-                        <span className="w-6 text-center text-sm tabular-nums">{l.quantity}</span>
-                        <Button variant="outline" size="icon" className="h-6 w-6" onClick={() => updateQty(l.product.id, 1)}>
-                          <Plus className="h-3 w-3" />
-                        </Button>
                       </div>
-                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => removeLine(l.product.id)}>
-                        <Trash2 className="h-3 w-3 text-destructive" />
-                      </Button>
+                      <Select
+                        value={l.priceTier}
+                        onChange={(e) => setLineTier(l.product.id, e.target.value as PriceTier)}
+                        className="h-6 px-1.5 text-[11px]"
+                      >
+                        <option value="OFFICIEL">Prix officiel</option>
+                        <option value="REDUCTION">Réduction{l.product.promoPrice == null ? " (indispo → officiel)" : ""}</option>
+                        <option value="GROSSISTE">Grossiste{l.product.wholesalePrice == null ? " (indispo → officiel)" : ""}</option>
+                      </Select>
                     </div>
                   ))
                 )}
@@ -217,6 +248,9 @@ export default function SalesPosPage() {
                     <div>
                       <Label>Montant payé</Label>
                       <Input type="number" min={0} placeholder={String(total)} value={paidAmount} onChange={(e) => setPaidAmount(e.target.value)} />
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Si le montant payé est inférieur au total, la différence devient une dette sur la fiche du client sélectionné.
+                      </p>
                     </div>
                   </>
                 )}
