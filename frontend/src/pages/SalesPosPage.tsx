@@ -15,7 +15,7 @@ import toast from "react-hot-toast";
 import type { Product, Store, Customer, Sale } from "@/types";
 
 // Les 3 tarifs disponibles à la vente, définis sur la fiche produit.
-type PriceTier = "OFFICIEL" | "REDUCTION" | "GROSSISTE";
+type PriceTier = "VENTE" | "GROSSISTE" | "REVENDEUR" | "PROMOTIONNEL";
 
 interface CartLine {
   product: Product;
@@ -28,8 +28,9 @@ interface CartLine {
 // Retourne le prix correspondant au tarif choisi ; si ce tarif n'est pas
 // renseigné sur la fiche produit, revient automatiquement au prix officiel.
 function priceForTier(product: Product, tier: PriceTier): number {
-  if (tier === "REDUCTION") return product.promoPrice ?? product.sellingPrice;
   if (tier === "GROSSISTE") return product.wholesalePrice ?? product.sellingPrice;
+  if (tier === "REVENDEUR") return product.resellerPrice ?? product.sellingPrice;
+  if (tier === "PROMOTIONNEL") return product.promoPrice ?? product.sellingPrice;
   return product.sellingPrice;
 }
 
@@ -69,7 +70,7 @@ export default function SalesPosPage() {
       if (existing) {
         return prev.map((l) => (l.product.id === product.id ? { ...l, quantity: l.quantity + 1 } : l));
       }
-      return [...prev, { product, quantity: 1, unitPrice: product.sellingPrice, discount: 0, priceTier: "OFFICIEL" }];
+      return [...prev, { product, quantity: 1, unitPrice: product.sellingPrice, discount: 0, priceTier: "VENTE" }];
     });
   }
 
@@ -205,9 +206,10 @@ export default function SalesPosPage() {
                         onChange={(e) => setLineTier(l.product.id, e.target.value as PriceTier)}
                         className="h-6 px-1.5 text-[11px]"
                       >
-                        <option value="OFFICIEL">Prix officiel</option>
-                        <option value="REDUCTION">Réduction{l.product.promoPrice == null ? " (indispo → officiel)" : ""}</option>
-                        <option value="GROSSISTE">Grossiste{l.product.wholesalePrice == null ? " (indispo → officiel)" : ""}</option>
+                        <option value="VENTE">Prix de vente</option>
+                        <option value="GROSSISTE">Prix grossiste{l.product.wholesalePrice == null ? " (indispo → vente)" : ""}</option>
+                        <option value="REVENDEUR">Prix revendeur{l.product.resellerPrice == null ? " (indispo → vente)" : ""}</option>
+                        <option value="PROMOTIONNEL">Prix promotionnel{l.product.promoPrice == null ? " (indispo → vente)" : ""}</option>
                       </Select>
                     </div>
                   ))
