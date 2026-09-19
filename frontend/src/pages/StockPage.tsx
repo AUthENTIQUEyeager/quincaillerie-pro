@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Warehouse, Search } from "lucide-react";
+import { Plus, Warehouse, Search, Check } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/common/EmptyState";
-import { formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import toast from "react-hot-toast";
 import type { StockRow, Product, Store } from "@/types";
 
@@ -23,9 +23,15 @@ export default function StockPage() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState({ productId: "", storeId: "", type: "ENTREE", quantity: 1, reason: "" });
-  // Recherche produit dans le formulaire de mouvement manuel (facilite la sélection
-  // quand le catalogue contient beaucoup de produits).
+
+  // Recherche + sélection du produit dans le formulaire de mouvement manuel.
+  // La sélection se fait UNIQUEMENT par clic sur un résultat (jamais via un
+  // <select> natif dont les options changent pendant la frappe) pour éviter
+  // tout risque de désynchronisation entre ce qui est affiché et le produit
+  // réellement enregistré dans le formulaire.
   const [productSearch, setProductSearch] = useState("");
+  const [productResultsOpen, setProductResultsOpen] = useState(false);
+  const selectedProduct = useMemo(() => products?.find((p) => p.id === form.productId) || null, [products, form.productId]);
 
   const create = useMutation({
     mutationFn: async () => api.post("/stock/movements", form),
@@ -39,16 +45,24 @@ export default function StockPage() {
   });
 
   function openCreate() {
-    setForm({ productId: products?.[0]?.id || "", storeId: stores?.[0]?.id || "", type: "ENTREE", quantity: 1, reason: "" });
+    const defaultProduct = products?.[0] || null;
+    setForm({ productId: defaultProduct?.id || "", storeId: stores?.[0]?.id || "", type: "ENTREE", quantity: 1, reason: "" });
     setProductSearch("");
+    setProductResultsOpen(false);
     setDialogOpen(true);
+  }
+
+  function selectProduct(p: Product) {
+    setForm((f) => ({ ...f, productId: p.id }));
+    setProductSearch("");
+    setProductResultsOpen(false);
   }
 
   const filteredProducts = useMemo(() => {
     if (!products) return [];
     const q = productSearch.trim().toLowerCase();
-    if (!q) return products;
-    return products.filter((p) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || p.barcode?.toLowerCase().includes(q));
+    if (!q) return products.slice(0, 20);
+    return products.filter((p) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || p.barcode?.toLowerCase().includes(q)).slice(0, 20);
   }, [products, productSearch]);
 
   const groupedByStore = useMemo(() => {
@@ -163,23 +177,52 @@ export default function StockPage() {
           <div className="space-y-3">
             <div>
               <Label>Produit</Label>
-              <div className="relative mb-1.5">
+
+              {/* Produit actuellement retenu pour ce mouvement : toujours visible, sans ambiguïté */}
+              {selectedProduct && (
+                <div className="mb-2 flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-sm">
+                  <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+                  <span className="min-w-0 flex-1 truncate font-medium">{selectedProduct.name}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{selectedProduct.sku}</span>
+                </div>
+              )}
+
+              <div className="relative">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  placeholder="Rechercher par nom, SKU ou code-barres..."
+                  placeholder="Rechercher un autre produit pour changer la sélection..."
                   className="h-8 pl-8 text-sm"
                   value={productSearch}
-                  onChange={(e) => setProductSearch(e.target.value)}
+                  onChange={(e) => {
+                    setProductSearch(e.target.value);
+                    setProductResultsOpen(true);
+                  }}
+                  onFocus={() => setProductResultsOpen(true)}
                 />
               </div>
-              <Select value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })}>
-                {filteredProducts.length === 0 && <option value="">Aucun produit trouvé</option>}
-                {filteredProducts.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.sku})
-                  </option>
-                ))}
-              </Select>
+
+              {productResultsOpen && (
+                <div className="mt-1 max-h-48 overflow-y-auto scrollbar-thin rounded-md border border-border">
+                  {filteredProducts.length === 0 ? (
+                    <p className="p-2.5 text-sm text-muted-foreground">Aucun produit trouvé.</p>
+                  ) : (
+                    filteredProducts.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => selectProduct(p)}
+                        className={cn(
+                          "flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm hover:bg-secondary",
+                          p.id === form.productId && "bg-primary/10"
+                        )}
+                      >
+                        <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">{p.sku}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
             <div>
               <Label>Dépôt</Label>
@@ -215,7 +258,7 @@ export default function StockPage() {
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
               Annuler
             </Button>
-            <Button loading={create.isPending} onClick={() => create.mutate()}>
+            <Button loading={create.isPending} disabled={!form.productId || !form.storeId} onClick={() => create.mutate()}>
               Enregistrer
             </Button>
           </DialogFooter>
