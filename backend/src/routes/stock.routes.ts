@@ -38,16 +38,21 @@ router.get(
 router.get(
   "/movements",
   asyncHandler(async (req, res) => {
-    const { storeId, productId } = req.query as Record<string, string>;
+    const { storeId, productId, from, to } = req.query as Record<string, string>;
     const where: any = {};
     if (storeId) where.storeId = storeId;
     if (productId) where.productId = productId;
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to) where.createdAt.lte = new Date(to);
+    }
     const companyFilter = req.auth!.role === "SUPER_ADMIN" ? {} : { product: { companyId: req.auth!.companyId ?? undefined } };
     const movements = await prisma.stockMovement.findMany({
       where: { ...where, ...companyFilter },
       include: { product: { select: { name: true, sku: true, unit: true } }, store: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
-      take: 200,
+      take: 500,
     });
     res.json(movements);
   })
