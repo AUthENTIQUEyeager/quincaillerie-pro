@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Warehouse, Search, Check } from "lucide-react";
+import { Plus, Warehouse, Search, Check, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -14,10 +14,24 @@ import { cn, formatDateTime } from "@/lib/utils";
 import toast from "react-hot-toast";
 import type { StockRow, Product, Store } from "@/types";
 
+// Transforme une date "YYYY-MM-DD" en bornes de journée (00:00:00 -> 23:59:59.999) en heure locale.
+function dayBounds(dateStr: string): { from: string; to: string } {
+  const start = new Date(`${dateStr}T00:00:00`);
+  const end = new Date(`${dateStr}T23:59:59.999`);
+  return { from: start.toISOString(), to: end.toISOString() };
+}
+
 export default function StockPage() {
   const queryClient = useQueryClient();
   const { data: stocks, isLoading } = useQuery({ queryKey: ["stock"], queryFn: async () => (await api.get<StockRow[]>("/stock")).data });
-  const { data: movements } = useQuery({ queryKey: ["stock-movements"], queryFn: async () => (await api.get("/stock/movements")).data });
+  const [movementsDayFilter, setMovementsDayFilter] = useState("");
+  const { data: movements } = useQuery({
+    queryKey: ["stock-movements", movementsDayFilter],
+    queryFn: async () => {
+      const params = movementsDayFilter ? dayBounds(movementsDayFilter) : undefined;
+      return (await api.get("/stock/movements", { params })).data;
+    },
+  });
   const { data: products } = useQuery({ queryKey: ["products"], queryFn: async () => (await api.get<Product[]>("/products")).data });
   const { data: stores } = useQuery({ queryKey: ["stores"], queryFn: async () => (await api.get<Store[]>("/stores")).data });
 
@@ -136,8 +150,19 @@ export default function StockPage() {
         </TabsContent>
 
         <TabsContent value="mouvements">
+          <div className="mb-3 flex items-end gap-2">
+            <div>
+              <Label className="mb-1 text-xs">Voir une journée précise</Label>
+              <Input type="date" className="h-9" value={movementsDayFilter} onChange={(e) => setMovementsDayFilter(e.target.value)} />
+            </div>
+            {movementsDayFilter && (
+              <Button variant="outline" size="icon" onClick={() => setMovementsDayFilter("")} aria-label="Effacer le filtre">
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
           {!movements?.length ? (
-            <EmptyState icon={Warehouse} title="Aucun mouvement enregistré" />
+            <EmptyState icon={Warehouse} title={movementsDayFilter ? "Aucun mouvement ce jour-là" : "Aucun mouvement enregistré"} />
           ) : (
             <Table>
               <TableHeader>
