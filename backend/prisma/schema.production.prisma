@@ -45,6 +45,7 @@ model Company {
   notifications Notification[]
   auditLogs    AuditLog[]
   employees    Employee[]
+  priceChanges PriceChange[]
 }
 
 model Store {
@@ -499,4 +500,24 @@ model AuditLog {
   entityId  String?
   details   String?
   createdAt DateTime @default(now())
+}
+
+// ---------------- HISTORIQUE DES PRIX ----------------
+// Une ligne par prix modifié depuis la page « Gestion des prix ».
+// Pas de clé étrangère vers Product : l'historique survit à la suppression d'un produit.
+model PriceChange {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  productId   String
+  productName String
+  field       String   // purchasePrice, sellingPrice, wholesalePrice, resellerPrice, promoPrice
+  oldValue    Float?
+  newValue    Float?
+  userId      String?
+  userName    String?
+  createdAt   DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([productId])
 }
