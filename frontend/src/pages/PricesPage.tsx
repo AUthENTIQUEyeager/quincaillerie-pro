@@ -1,19 +1,43 @@
-
+```tsx
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Search, Coins, Undo2, History, Save } from "lucide-react";
+import {
+  Search,
+  Coins,
+  Undo2,
+  History,
+  Save,
+  FileDown,
+  FileSpreadsheet,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatDateTime } from "@/lib/utils";
 import toast from "react-hot-toast";
+
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 type PriceField =
   | "purchasePrice"
@@ -57,13 +81,15 @@ const FIELD_LABEL = Object.fromEntries(
   COLUMNS.map((c) => [c.field, c.label])
 ) as Record<PriceField, string>;
 
-const nf = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 6 });
+const nf = new Intl.NumberFormat("fr-FR", {
+  maximumFractionDigits: 6,
+});
 
 const fmt = (v: number | null | undefined) =>
   v === null || v === undefined ? "" : nf.format(v);
 
 // Évite les résidus de calcul flottant
-// (ex. 1000.0000000001) sans arrondir le prix.
+// sans modifier réellement la précision du prix.
 const clean = (v: number) => parseFloat(v.toFixed(6));
 
 function parseInput(text: string): number | null | "invalid" {
@@ -91,7 +117,8 @@ export default function PricesPage() {
 
   const [search, setSearch] = useState("");
 
-  // Valeurs de travail des lignes modifiées (non enregistrées)
+  // Valeurs de travail des lignes modifiées
+  // mais pas encore enregistrées.
   const [draft, setDraft] = useState<Record<string, Prices>>({});
 
   const [active, setActive] = useState<{
@@ -119,9 +146,10 @@ export default function PricesPage() {
   const working = (p: PriceProduct): Prices =>
     draft[p.id] ?? p;
 
-  // Produits groupés par catégorie (A-Z),
-  // « Sans catégorie » à la fin,
-  // puis A-Z par nom.
+  /*
+   * Produits affichés dans la page.
+   * La recherche ne sert qu'à l'affichage.
+   */
   const groups = useMemo(() => {
     const q = search.trim().toLowerCase();
 
@@ -134,7 +162,10 @@ export default function PricesPage() {
 
     const map = new Map<
       string,
-      { name: string; items: PriceProduct[] }
+      {
+        name: string;
+        items: PriceProduct[];
+      }
     >();
 
     for (const p of list) {
@@ -150,26 +181,36 @@ export default function PricesPage() {
       map.get(key)!.items.push(p);
     }
 
-    const arr = [...map.entries()].map(([key, g]) => ({
-      key,
-      ...g,
-    }));
+    const arr = [...map.entries()].map(
+      ([key, g]) => ({
+        key,
+        ...g,
+      })
+    );
 
     arr.sort((a, b) =>
       a.key === "__none__"
         ? 1
         : b.key === "__none__"
         ? -1
-        : a.name.localeCompare(b.name, "fr", {
-            sensitivity: "base",
-          })
+        : a.name.localeCompare(
+            b.name,
+            "fr",
+            {
+              sensitivity: "base",
+            }
+          )
     );
 
     for (const g of arr) {
       g.items.sort((a, b) =>
-        a.name.localeCompare(b.name, "fr", {
-          sensitivity: "base",
-        })
+        a.name.localeCompare(
+          b.name,
+          "fr",
+          {
+            sensitivity: "base",
+          }
+        )
       );
     }
 
@@ -177,7 +218,10 @@ export default function PricesPage() {
   }, [products, search]);
 
   const flatIds = useMemo(
-    () => groups.flatMap((g) => g.items.map((p) => p.id)),
+    () =>
+      groups.flatMap((g) =>
+        g.items.map((p) => p.id)
+      ),
     [groups]
   );
 
@@ -205,8 +249,10 @@ export default function PricesPage() {
     [products, draft]
   );
 
-  // Avertit avant de quitter la page
-  // avec des modifications non enregistrées.
+  /*
+   * Avertit avant de quitter la page
+   * avec des modifications non enregistrées.
+   */
   useEffect(() => {
     if (!changedRows.length) return;
 
@@ -215,10 +261,16 @@ export default function PricesPage() {
       e.returnValue = "";
     };
 
-    window.addEventListener("beforeunload", handler);
+    window.addEventListener(
+      "beforeunload",
+      handler
+    );
 
     return () =>
-      window.removeEventListener("beforeunload", handler);
+      window.removeEventListener(
+        "beforeunload",
+        handler
+      );
   }, [changedRows.length]);
 
   function focusCell(
@@ -232,12 +284,31 @@ export default function PricesPage() {
 
     if (el) {
       el.focus();
+
       el.scrollIntoView({
         block: "nearest",
       });
     }
   }
 
+  /*
+   * Modification d'un prix.
+   *
+   * Chaque changement calcule :
+   *
+   * delta = nouveau prix - ancien prix
+   *
+   * Ce delta est ensuite appliqué aux autres prix
+   * renseignés de la même ligne.
+   *
+   * Cela fonctionne aussi bien pour :
+   *
+   * 1000 -> 1013 = +13
+   *
+   * que pour :
+   *
+   * 1013 -> 990 = -23
+   */
   function commit(
     p: PriceProduct,
     field: PriceField,
@@ -249,15 +320,22 @@ export default function PricesPage() {
       toast.error(
         "Montant invalide (nombre positif attendu)."
       );
+
       return false;
     }
 
     const current = working(p);
     const oldValue = current[field];
-    const next: Prices = { ...current };
+
+    const next: Prices = {
+      ...current,
+    };
 
     if (parsed === null) {
-      // Vider : seulement possible pour les prix facultatifs.
+      /*
+       * Vider un prix :
+       * uniquement autorisé pour les prix facultatifs.
+       */
       if (
         field === "purchasePrice" ||
         field === "sellingPrice"
@@ -265,6 +343,7 @@ export default function PricesPage() {
         toast.error(
           "Le prix d'achat et le prix de vente sont obligatoires."
         );
+
         return false;
       }
 
@@ -274,14 +353,7 @@ export default function PricesPage() {
       parsed !== oldValue
     ) {
       /*
-       * Chaque modification propage l'écart.
-       *
-       * Exemple :
-       * 1000 -> 1013 = +13
-       * 1013 -> 990  = -23
-       *
-       * Dans les deux cas, le même delta est appliqué
-       * aux autres prix renseignés.
+       * Modification avec propagation.
        */
       const delta = parsed - oldValue;
 
@@ -289,16 +361,26 @@ export default function PricesPage() {
 
       for (const c of COLUMNS) {
         if (c.field === field) {
-          // Le prix directement modifié prend exactement
-          // la nouvelle valeur saisie.
+          /*
+           * Le champ directement modifié
+           * prend exactement la valeur saisie.
+           */
           next[c.field] = parsed;
-        } else if (current[c.field] !== null) {
-          // Même écart sur les autres prix renseignés.
+        } else if (
+          current[c.field] !== null
+        ) {
+          /*
+           * Les autres prix renseignés
+           * reçoivent le même delta.
+           */
           let v = clean(
-            (current[c.field] as number) + delta
+            (current[c.field] as number) +
+              delta
           );
 
-          // Aucun prix ne peut devenir négatif.
+          /*
+           * Empêche un prix de devenir négatif.
+           */
           if (v < 0) {
             v = 0;
             clamped = true;
@@ -317,7 +399,9 @@ export default function PricesPage() {
         );
       }
     } else {
-      // Prix facultatif vide ou valeur inchangée.
+      /*
+       * Valeur inchangée ou prix facultatif vide.
+       */
       next[field] = parsed;
     }
 
@@ -345,8 +429,6 @@ export default function PricesPage() {
     const nextId = flatIds[idx + 1];
 
     if (nextId) {
-      // Passe à la ligne suivante,
-      // même colonne.
       setTimeout(
         () => focusCell(nextId, field),
         0
@@ -374,25 +456,412 @@ export default function PricesPage() {
     setActive(null);
   }
 
+  /*
+   * Prépare les produits pour l'export.
+   *
+   * IMPORTANT :
+   * on utilise TOUS les produits récupérés par l'API,
+   * pas seulement ceux visibles après une recherche.
+   *
+   * Les modifications non enregistrées sont également
+   * prises en compte.
+   */
+  function getExportProducts() {
+    return (products || []).map((p) => {
+      const w = working(p);
+
+      return {
+        ...p,
+        ...w,
+      };
+    });
+  }
+
+  /*
+   * Export Excel
+   */
+  function exportExcel() {
+    const exportProducts =
+      getExportProducts();
+
+    if (!exportProducts.length) {
+      toast.error(
+        "Aucun produit à exporter."
+      );
+      return;
+    }
+
+    const productRows =
+      exportProducts.map((p) => ({
+        Produit: p.name,
+        SKU: p.sku,
+        Catégorie:
+          p.category?.name ??
+          "Sans catégorie",
+        Unité: p.unit,
+        Statut: p.isActive
+          ? "Actif"
+          : "Inactif",
+        "Prix d'achat":
+          p.purchasePrice ?? "",
+        "Prix de vente":
+          p.sellingPrice ?? "",
+        Grossiste:
+          p.wholesalePrice ?? "",
+        Revendeur:
+          p.resellerPrice ?? "",
+        Promo:
+          p.promoPrice ?? "",
+        "Dernière modification":
+          p.updatedAt
+            ? formatDateTime(p.updatedAt)
+            : "",
+      }));
+
+    const workbook =
+      XLSX.utils.book_new();
+
+    /*
+     * Feuille principale des prix.
+     */
+    const pricesSheet =
+      XLSX.utils.json_to_sheet(
+        productRows
+      );
+
+    /*
+     * Largeur des colonnes.
+     */
+    pricesSheet["!cols"] = [
+      { wch: 30 },
+      { wch: 18 },
+      { wch: 22 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 24 },
+    ];
+
+    XLSX.utils.book_append_sheet(
+      workbook,
+      pricesSheet,
+      "Prix"
+    );
+
+    /*
+     * Deuxième feuille : historique.
+     *
+     * L'historique peut ne pas encore avoir été chargé
+     * si la fenêtre Historique n'a jamais été ouverte.
+     */
+    const historyRows =
+      (history || []).map((h) => ({
+        Date: h.createdAt
+          ? formatDateTime(h.createdAt)
+          : "",
+        Produit: h.productName,
+        Prix:
+          FIELD_LABEL[h.field] ??
+          h.field,
+        Ancien:
+          h.oldValue ?? "",
+        Nouveau:
+          h.newValue ?? "",
+        "Modifié par":
+          h.userName ?? "",
+      }));
+
+    const historySheet =
+      XLSX.utils.json_to_sheet(
+        historyRows
+      );
+
+    historySheet["!cols"] = [
+      { wch: 22 },
+      { wch: 30 },
+      { wch: 20 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 25 },
+    ];
+
+    XLSX.utils.book_append_sheet(
+      workbook,
+      historySheet,
+      "Historique"
+    );
+
+    const now = new Date();
+
+    const date =
+      now.toISOString().slice(0, 10);
+
+    XLSX.writeFile(
+      workbook,
+      `gestion-prix-${date}.xlsx`
+    );
+
+    toast.success(
+      "Export Excel téléchargé."
+    );
+  }
+
+  /*
+   * Export PDF
+   */
+  function exportPDF() {
+    const exportProducts =
+      getExportProducts();
+
+    if (!exportProducts.length) {
+      toast.error(
+        "Aucun produit à exporter."
+      );
+      return;
+    }
+
+    const doc = new jsPDF({
+      orientation: "landscape",
+      unit: "mm",
+      format: "a4",
+    });
+
+    /*
+     * Titre
+     */
+    doc.setFontSize(18);
+    doc.text(
+      "Gestion des prix",
+      14,
+      15
+    );
+
+    doc.setFontSize(9);
+
+    const now = new Date();
+
+    doc.text(
+      `Export du ${formatDateTime(
+        now.toISOString()
+      )}`,
+      14,
+      22
+    );
+
+    doc.text(
+      `${exportProducts.length} produit(s)`,
+      14,
+      28
+    );
+
+    /*
+     * Tableau des produits.
+     */
+    const productTable =
+      exportProducts.map((p) => [
+        p.name,
+        p.sku,
+        p.category?.name ??
+          "Sans catégorie",
+        p.isActive
+          ? "Actif"
+          : "Inactif",
+        p.purchasePrice === null
+          ? "—"
+          : fmt(p.purchasePrice),
+        p.sellingPrice === null
+          ? "—"
+          : fmt(p.sellingPrice),
+        p.wholesalePrice === null
+          ? "—"
+          : fmt(p.wholesalePrice),
+        p.resellerPrice === null
+          ? "—"
+          : fmt(p.resellerPrice),
+        p.promoPrice === null
+          ? "—"
+          : fmt(p.promoPrice),
+      ]);
+
+    autoTable(doc, {
+      startY: 34,
+      head: [
+        [
+          "Produit",
+          "SKU",
+          "Catégorie",
+          "Statut",
+          "Achat",
+          "Vente",
+          "Grossiste",
+          "Revendeur",
+          "Promo",
+        ],
+      ],
+      body: productTable,
+      styles: {
+        fontSize: 7,
+        cellPadding: 2,
+      },
+      headStyles: {
+        fontSize: 7,
+      },
+      margin: {
+        left: 8,
+        right: 8,
+      },
+    });
+
+    /*
+     * Historique
+     */
+    if (history && history.length > 0) {
+      const finalY =
+        (doc as any).lastAutoTable
+          ?.finalY ?? 34;
+
+      let startY =
+        finalY + 15;
+
+      /*
+       * Si on arrive trop bas sur la page,
+       * on crée une nouvelle page.
+       */
+      if (startY > 180) {
+        doc.addPage();
+        startY = 15;
+      }
+
+      doc.setFontSize(14);
+
+      doc.text(
+        "Historique des modifications",
+        14,
+        startY
+      );
+
+      const historyTable =
+        history.map((h) => [
+          h.createdAt
+            ? formatDateTime(
+                h.createdAt
+              )
+            : "",
+          h.productName,
+          FIELD_LABEL[h.field] ??
+            h.field,
+          h.oldValue === null
+            ? "—"
+            : fmt(h.oldValue),
+          h.newValue === null
+            ? "—"
+            : fmt(h.newValue),
+          h.userName || "—",
+        ]);
+
+      autoTable(doc, {
+        startY: startY + 6,
+        head: [
+          [
+            "Date",
+            "Produit",
+            "Prix",
+            "Ancien",
+            "Nouveau",
+            "Par",
+          ],
+        ],
+        body: historyTable,
+        styles: {
+          fontSize: 7,
+          cellPadding: 2,
+        },
+        headStyles: {
+          fontSize: 7,
+        },
+        margin: {
+          left: 8,
+          right: 8,
+        },
+      });
+    }
+
+    /*
+     * Pied de page sur toutes les pages.
+     */
+    const pageCount =
+      doc.getNumberOfPages();
+
+    for (
+      let i = 1;
+      i <= pageCount;
+      i++
+    ) {
+      doc.setPage(i);
+
+      const pageHeight =
+        doc.internal.pageSize.height;
+
+      doc.setFontSize(8);
+
+      doc.text(
+        `Page ${i} / ${pageCount}`,
+        14,
+        pageHeight - 7
+      );
+
+      doc.text(
+        "Gestion des prix",
+        270,
+        pageHeight - 7,
+        {
+          align: "right",
+        }
+      );
+    }
+
+    const date =
+      now.toISOString().slice(0, 10);
+
+    doc.save(
+      `gestion-prix-${date}.pdf`
+    );
+
+    toast.success(
+      "Export PDF téléchargé."
+    );
+  }
+
   const save = useMutation({
     mutationFn: async () => {
-      const changes = changedRows.map((p) => {
-        const d = draft[p.id];
+      const changes =
+        changedRows.map((p) => {
+          const d = draft[p.id];
 
-        const prices: Partial<Prices> = {};
+          const prices: Partial<Prices> =
+            {};
 
-        for (const c of COLUMNS) {
-          if (d[c.field] !== p[c.field]) {
-            prices[c.field] = d[c.field];
+          for (const c of COLUMNS) {
+            if (
+              d[c.field] !==
+              p[c.field]
+            ) {
+              prices[c.field] =
+                d[c.field];
+            }
           }
-        }
 
-        return {
-          productId: p.id,
-          expectedUpdatedAt: p.updatedAt,
-          prices,
-        };
-      });
+          return {
+            productId: p.id,
+            expectedUpdatedAt:
+              p.updatedAt,
+            prices,
+          };
+        });
 
       return (
         await api.put<{
@@ -417,7 +886,9 @@ export default function PricesPage() {
       });
 
       queryClient.invalidateQueries({
-        queryKey: ["prices-history"],
+        queryKey: [
+          "prices-history",
+        ],
       });
 
       queryClient.invalidateQueries({
@@ -428,14 +899,20 @@ export default function PricesPage() {
     onError: (err: any) => {
       setConfirmOpen(false);
 
-      if (err?.response?.status === 409) {
-        // Données devenues obsolètes :
-        // on recharge et on repart d'une base propre.
+      if (
+        err?.response?.status === 409
+      ) {
         resetAll();
 
-        queryClient.invalidateQueries({
-          queryKey: ["prices"],
-        });
+        queryClient.invalidateQueries(
+          {
+            queryKey: ["prices"],
+          }
+        );
+
+        toast.error(
+          "Les données ont changé. La page a été rechargée."
+        );
       }
     },
   });
@@ -449,13 +926,38 @@ export default function PricesPage() {
           <>
             <Button
               variant="outline"
-              onClick={() => setHistoryOpen(true)}
+              onClick={exportExcel}
+              disabled={
+                !products?.length
+              }
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              Excel
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={exportPDF}
+              disabled={
+                !products?.length
+              }
+            >
+              <FileDown className="h-4 w-4" />
+              PDF
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={() =>
+                setHistoryOpen(true)
+              }
             >
               <History className="h-4 w-4" />
               Historique
             </Button>
 
-            {changedRows.length > 0 && (
+            {changedRows.length >
+              0 && (
               <Button
                 variant="outline"
                 onClick={resetAll}
@@ -466,12 +968,17 @@ export default function PricesPage() {
             )}
 
             <Button
-              disabled={!changedRows.length}
-              onClick={() => setConfirmOpen(true)}
+              disabled={
+                !changedRows.length
+              }
+              onClick={() =>
+                setConfirmOpen(true)
+              }
             >
               <Save className="h-4 w-4" />
               Enregistrer
-              {changedRows.length > 0
+              {changedRows.length >
+              0
                 ? ` (${changedRows.length})`
                 : ""}
             </Button>
@@ -494,7 +1001,9 @@ export default function PricesPage() {
 
       {isLoading ? (
         <div className="space-y-2">
-          {Array.from({ length: 6 }).map((_, i) => (
+          {Array.from({
+            length: 6,
+          }).map((_, i) => (
             <Skeleton
               key={i}
               className="h-12"
@@ -511,7 +1020,9 @@ export default function PricesPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Produit</TableHead>
+              <TableHead>
+                Produit
+              </TableHead>
 
               {COLUMNS.map((c) => (
                 <TableHead
@@ -531,14 +1042,21 @@ export default function PricesPage() {
               <GroupRows
                 key={g.key}
                 name={g.name}
-                count={g.items.length}
+                count={
+                  g.items.length
+                }
               >
                 {g.items.map((p) => {
-                  const w = working(p);
+                  const w =
+                    working(p);
 
                   const rowChanged =
-                    COLUMNS.some((c) =>
-                      isChanged(p, c.field)
+                    COLUMNS.some(
+                      (c) =>
+                        isChanged(
+                          p,
+                          c.field
+                        )
                     );
 
                   return (
@@ -569,8 +1087,10 @@ export default function PricesPage() {
 
                       {COLUMNS.map((c) => {
                         const isActive =
-                          active?.id === p.id &&
-                          active.field === c.field;
+                          active?.id ===
+                            p.id &&
+                          active.field ===
+                            c.field;
 
                         const changed =
                           isChanged(
@@ -580,7 +1100,9 @@ export default function PricesPage() {
 
                         return (
                           <TableCell
-                            key={c.field}
+                            key={
+                              c.field
+                            }
                             className="py-2"
                           >
                             <Input
@@ -598,46 +1120,73 @@ export default function PricesPage() {
                               value={
                                 isActive
                                   ? active!.text
-                                  : fmt(w[c.field])
+                                  : fmt(
+                                      w[
+                                        c.field
+                                      ]
+                                    )
                               }
-                              onFocus={(e) => {
-                                setActive({
-                                  id: p.id,
-                                  field: c.field,
-                                  text:
-                                    w[c.field] ===
-                                    null
-                                      ? ""
-                                      : String(
-                                          w[c.field]
-                                        ),
-                                });
+                              onFocus={(
+                                e
+                              ) => {
+                                setActive(
+                                  {
+                                    id: p.id,
+                                    field:
+                                      c.field,
+                                    text:
+                                      w[
+                                        c
+                                          .field
+                                      ] ===
+                                      null
+                                        ? ""
+                                        : String(
+                                            w[
+                                              c
+                                                .field
+                                            ]
+                                          ),
+                                  }
+                                );
 
                                 e.currentTarget.select();
                               }}
-                              onChange={(e) =>
-                                setActive({
-                                  id: p.id,
-                                  field: c.field,
-                                  text: e.target.value,
-                                })
-                              }
-                              onBlur={() =>
-                                setActive((a) =>
-                                  a &&
-                                  a.id === p.id &&
-                                  a.field ===
-                                    c.field
-                                    ? null
-                                    : a
+                              onChange={(
+                                e
+                              ) =>
+                                setActive(
+                                  {
+                                    id: p.id,
+                                    field:
+                                      c.field,
+                                    text: e
+                                      .target
+                                      .value,
+                                  }
                                 )
                               }
-                              onKeyDown={(e) => {
+                              onBlur={() =>
+                                setActive(
+                                  (a) =>
+                                    a &&
+                                    a.id ===
+                                      p.id &&
+                                    a.field ===
+                                      c.field
+                                      ? null
+                                      : a
+                                )
+                              }
+                              onKeyDown={(
+                                e
+                              ) => {
                                 if (
                                   e.key ===
                                   "Enter"
                                 ) {
                                   e.preventDefault();
+
                                   onEnter(
                                     p,
                                     c.field
@@ -646,7 +1195,10 @@ export default function PricesPage() {
                                   e.key ===
                                   "Escape"
                                 ) {
-                                  setActive(null);
+                                  setActive(
+                                    null
+                                  );
+
                                   e.currentTarget.blur();
                                 }
                               }}
@@ -654,11 +1206,16 @@ export default function PricesPage() {
 
                             {changed && (
                               <p className="mt-0.5 text-right text-[11px] text-muted-foreground line-through tabular-nums">
-                                {p[c.field] ===
+                                {p[
+                                  c.field
+                                ] ===
                                 null
                                   ? "vide"
                                   : fmt(
-                                      p[c.field]
+                                      p[
+                                        c
+                                          .field
+                                      ]
                                     )}
                               </p>
                             )}
@@ -672,7 +1229,9 @@ export default function PricesPage() {
                             variant="ghost"
                             size="icon"
                             onClick={() =>
-                              resetRow(p.id)
+                              resetRow(
+                                p.id
+                              )
                             }
                             aria-label="Annuler les modifications de cette ligne"
                           >
@@ -690,8 +1249,9 @@ export default function PricesPage() {
       )}
 
       <p className="mt-3 text-xs text-muted-foreground">
-        Entrée valide le prix et passe à la ligne suivante.
-        Échap annule la saisie en cours. Rien n'est appliqué
+        Entrée valide le prix et passe à
+        la ligne suivante. Échap annule la
+        saisie en cours. Rien n'est appliqué
         avant « Enregistrer ».
       </p>
 
@@ -703,7 +1263,9 @@ export default function PricesPage() {
         confirmLabel="Enregistrer"
         variant="default"
         loading={save.isPending}
-        onConfirm={() => save.mutate()}
+        onConfirm={() =>
+          save.mutate()
+        }
       />
 
       <Dialog
@@ -713,7 +1275,8 @@ export default function PricesPage() {
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>
-              Historique des modifications de prix
+              Historique des modifications
+              de prix
             </DialogTitle>
           </DialogHeader>
 
@@ -722,61 +1285,85 @@ export default function PricesPage() {
               <Skeleton className="h-24" />
             ) : history.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground">
-                Aucune modification enregistrée pour le
+                Aucune modification
+                enregistrée pour le
                 moment.
               </p>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Produit</TableHead>
-                    <TableHead>Prix</TableHead>
+                    <TableHead>
+                      Date
+                    </TableHead>
+                    <TableHead>
+                      Produit
+                    </TableHead>
+                    <TableHead>
+                      Prix
+                    </TableHead>
                     <TableHead className="text-right">
                       Ancien
                     </TableHead>
                     <TableHead className="text-right">
                       Nouveau
                     </TableHead>
-                    <TableHead>Par</TableHead>
+                    <TableHead>
+                      Par
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
 
                 <TableBody>
-                  {history.map((h) => (
-                    <TableRow key={h.id}>
-                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                        {formatDateTime(
-                          h.createdAt
-                        )}
-                      </TableCell>
+                  {history.map(
+                    (h) => (
+                      <TableRow
+                        key={h.id}
+                      >
+                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                          {formatDateTime(
+                            h.createdAt
+                          )}
+                        </TableCell>
 
-                      <TableCell className="font-medium">
-                        {h.productName}
-                      </TableCell>
+                        <TableCell className="font-medium">
+                          {
+                            h.productName
+                          }
+                        </TableCell>
 
-                      <TableCell>
-                        {FIELD_LABEL[h.field] ??
-                          h.field}
-                      </TableCell>
+                        <TableCell>
+                          {FIELD_LABEL[
+                            h.field
+                          ] ??
+                            h.field}
+                        </TableCell>
 
-                      <TableCell className="text-right tabular-nums">
-                        {h.oldValue === null
-                          ? "—"
-                          : fmt(h.oldValue)}
-                      </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {h.oldValue ===
+                          null
+                            ? "—"
+                            : fmt(
+                                h.oldValue
+                              )}
+                        </TableCell>
 
-                      <TableCell className="text-right font-medium tabular-nums">
-                        {h.newValue === null
-                          ? "—"
-                          : fmt(h.newValue)}
-                      </TableCell>
+                        <TableCell className="text-right font-medium tabular-nums">
+                          {h.newValue ===
+                          null
+                            ? "—"
+                            : fmt(
+                                h.newValue
+                              )}
+                        </TableCell>
 
-                      <TableCell className="text-muted-foreground">
-                        {h.userName || "—"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        <TableCell className="text-muted-foreground">
+                          {h.userName ||
+                            "—"}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  )}
                 </TableBody>
               </Table>
             )}
@@ -800,7 +1387,9 @@ function GroupRows({
     <>
       <TableRow className="bg-secondary/60 hover:bg-secondary/60">
         <TableCell
-          colSpan={COLUMNS.length + 2}
+          colSpan={
+            COLUMNS.length + 2
+          }
           className="py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
         >
           {name}
@@ -815,4 +1404,4 @@ function GroupRows({
     </>
   );
 }
-
+```
