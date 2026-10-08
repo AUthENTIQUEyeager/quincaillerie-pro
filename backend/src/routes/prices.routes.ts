@@ -1,4 +1,4 @@
-```ts
+
 import { Router } from "express";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
@@ -275,4 +275,4 @@ router.get(
 );
 
 export default router;
-```
+
