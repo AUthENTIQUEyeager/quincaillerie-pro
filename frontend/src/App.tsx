@@ -24,6 +24,7 @@ import UsersPage from "@/pages/UsersPage";
 import NotificationsPage from "@/pages/NotificationsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import SuperAdminPage from "@/pages/SuperAdminPage";
+import PricesPage from "@/pages/PricesPage";
 import NotFoundPage from "@/pages/NotFoundPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -44,6 +45,13 @@ function CompanyRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// Page réservée au propriétaire et au gérant (le serveur applique aussi cette règle)
+function PricesRoute({ children }: { children: React.ReactNode }) {
+  const user = useAuthStore((s) => s.user);
+  if (user?.role !== "PROPRIETAIRE" && user?.role !== "GERANT") return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -61,6 +69,7 @@ export default function App() {
 
         <Route path="/" element={<CompanyRoute><DashboardPage /></CompanyRoute>} />
         <Route path="/produits" element={<CompanyRoute><ProductsPage /></CompanyRoute>} />
+        <Route path="/prix" element={<CompanyRoute><PricesRoute><PricesPage /></PricesRoute></CompanyRoute>} />
         <Route path="/catalogue" element={<CompanyRoute><CatalogPage /></CompanyRoute>} />
         <Route path="/fournisseurs" element={<CompanyRoute><SuppliersPage /></CompanyRoute>} />
         <Route path="/clients" element={<CompanyRoute><CustomersPage /></CompanyRoute>} />
