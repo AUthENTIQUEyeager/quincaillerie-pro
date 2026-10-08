@@ -3,18 +3,31 @@ import { Router } from "express";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
-import { requireAuth, requireCompany, requireRole } from "../middleware/auth";
-import { asyncHandler, AppError } from "../middleware/errorHandler";
+import {
+  requireAuth,
+  requireCompany,
+  requireRole,
+} from "../middleware/auth";
+import {
+  asyncHandler,
+  AppError,
+} from "../middleware/errorHandler";
+
+const router = Router();
 
 // Page « Gestion des prix » : réservée au propriétaire et au gérant
-// (le Super Admin passe toujours via requireRole).
-const router = Router();
-router.use(requireAuth, requireCompany, requireRole("PROPRIETAIRE", "GERANT"));
+router.use(
+  requireAuth,
+  requireCompany,
+  requireRole("PROPRIETAIRE", "GERANT")
+);
 
 function scope(req: any) {
   return req.auth.role === "SUPER_ADMIN"
     ? {}
-    : { companyId: req.auth.companyId ?? undefined };
+    : {
+        companyId: req.auth.companyId ?? undefined,
+      };
 }
 
 const PRICE_FIELDS = [
@@ -34,7 +47,6 @@ const OPTIONAL_FIELDS: PriceField[] = [
 ];
 
 // Liste des produits avec leurs prix
-// updatedAt sert à détecter une modification concurrente
 router.get(
   "/",
   asyncHandler(async (req, res) => {
@@ -73,7 +85,6 @@ const price = z.number().finite().min(0);
 
 const changeSchema = z.object({
   productId: z.string().min(1),
-
   expectedUpdatedAt: z.string().min(1),
 
   prices: z
@@ -91,8 +102,7 @@ const bodySchema = z.object({
   changes: z.array(changeSchema).min(1).max(2000),
 });
 
-// Enregistrement groupé : tout est appliqué, ou rien
-// (une seule transaction)
+// Enregistrement groupé
 router.put(
   "/",
   asyncHandler(async (req, res) => {
@@ -127,8 +137,7 @@ router.put(
       );
     }
 
-    // Un produit modifié par quelqu'un d'autre depuis le chargement
-    // de la page est refusé
+    // Détection des modifications concurrentes
     const conflicts = changes
       .filter(
         (c) =>
@@ -171,8 +180,6 @@ router.put(
         for (const c of changes) {
           const p = byId.get(c.productId)!;
 
-          // Type Prisma utilisé ici pour être compatible avec
-          // tx.product.update()
           const data: Prisma.ProductUpdateInput = {};
 
           for (const field of PRICE_FIELDS) {
@@ -182,7 +189,7 @@ router.put(
               continue;
             }
 
-            // purchasePrice et sellingPrice ne peuvent pas être vides
+            // purchasePrice et sellingPrice ne peuvent pas être null
             if (
               next === null &&
               !OPTIONAL_FIELDS.includes(field)
@@ -196,7 +203,33 @@ router.put(
               continue;
             }
 
-            data[field] = next;
+            // Affectation explicite des champs pour satisfaire
+            // les types générés par Prisma.
+            switch (field) {
+              case "purchasePrice":
+                if (next !== null) {
+                  data.purchasePrice = next;
+                }
+                break;
+
+              case "sellingPrice":
+                if (next !== null) {
+                  data.sellingPrice = next;
+                }
+                break;
+
+              case "wholesalePrice":
+                data.wholesalePrice = next;
+                break;
+
+              case "resellerPrice":
+                data.resellerPrice = next;
+                break;
+
+              case "promoPrice":
+                data.promoPrice = next;
+                break;
+            }
 
             history.push({
               companyId: p.companyId,
@@ -248,7 +281,6 @@ router.put(
 );
 
 // Historique des modifications de prix
-// (200 dernières)
 router.get(
   "/history",
   asyncHandler(async (req, res) => {
