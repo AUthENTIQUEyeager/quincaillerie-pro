@@ -14,6 +14,9 @@ Logiciel de gestion commerciale complet pour quincailleries — catalogue, stock
 
 ## Structure du projet
 
+
+(src/routes/prices.routes.ts(119,58): error TS2322: Type 'Partial<Record<"purchasePrice" | "sellingPrice" | "wholesalePrice" | "resellerPrice" | "promoPrice", number | null>>' is not assignable to type '(Without<ProductUpdateInput, ProductUncheckedUpdateInput> & ProductUncheckedUpdateInput) | (Without<...> & ProductUpdateInput)'.)
+
 ```
 quincaillerie-pro/
 ├── backend/          API REST (Express + Prisma + SQLite)
