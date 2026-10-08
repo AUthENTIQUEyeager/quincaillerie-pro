@@ -20,6 +20,7 @@ import {
   Bell,
   ShieldCheck,
   Wrench,
+  Coins,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/authStore";
@@ -40,6 +41,7 @@ const nav: { section: string; items: NavItem[] }[] = [
     section: "Catalogue",
     items: [
       { to: "/produits", label: "Produits", icon: Package },
+      { to: "/prix", label: "Gestion des prix", icon: Coins, roles: ["PROPRIETAIRE", "GERANT"] },
       { to: "/catalogue", label: "Catégories & marques", icon: Tags },
       { to: "/fournisseurs", label: "Fournisseurs", icon: Truck },
       { to: "/clients", label: "Clients", icon: Users },
