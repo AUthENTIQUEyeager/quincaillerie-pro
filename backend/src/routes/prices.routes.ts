@@ -1,4 +1,3 @@
-
 import { Router } from "express";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
@@ -77,6 +76,8 @@ router.get(
       },
     });
 
+    // Toujours des prix frais : jamais de réponse mise en cache par le navigateur ou un proxy
+    res.set("Cache-Control", "no-store");
     res.json(products);
   })
 );
@@ -272,6 +273,11 @@ router.put(
       }
     );
 
+    // Trace dans les logs Render pour vérifier que l'enregistrement arrive bien au serveur
+    console.log(
+      `[prices] PUT user=${userId} demandés=${changes.length} modifiés=${updatedProducts} prix=${updatedPrices}`
+    );
+
     res.json({
       ok: true,
       updatedProducts,
@@ -307,4 +313,3 @@ router.get(
 );
 
 export default router;
-
