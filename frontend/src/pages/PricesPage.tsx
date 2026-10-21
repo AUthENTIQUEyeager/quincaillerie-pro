@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -129,6 +129,8 @@ export default function PricesPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Évite de valider deux fois une saisie quand Entrée fait passer à la ligne suivante
+  const skipBlurCommit = useRef(false);
 
   const { data: products, isLoading } = useQuery({
     queryKey: ["prices"],
@@ -320,6 +322,7 @@ export default function PricesPage() {
       return;
     }
 
+    skipBlurCommit.current = true;
     setActive(null);
 
     const idx = flatIds.indexOf(p.id);
@@ -330,6 +333,11 @@ export default function PricesPage() {
     } else {
       (document.activeElement as HTMLElement | null)?.blur();
     }
+
+    // Le blur déclenché par le changement de cellule a eu lieu : on réarme le drapeau
+    setTimeout(() => {
+      skipBlurCommit.current = false;
+    }, 0);
   }
 
   function resetRow(id: string) {
@@ -682,7 +690,18 @@ export default function PricesPage() {
     },
 
     onSuccess: (r) => {
-      toast.success(`${r.updatedProducts} produit(s) mis à jour`);
+      if (!r.updatedProducts) {
+        toast.error(
+          "Le serveur n'a modifié aucun produit. Rien n'a été enregistré."
+        );
+      } else if (r.updatedProducts !== changedRows.length) {
+        toast(
+          `${r.updatedProducts} produit(s) mis à jour sur ${changedRows.length} demandé(s).`,
+          { icon: "⚠️" }
+        );
+      } else {
+        toast.success(`${r.updatedProducts} produit(s) mis à jour`);
+      }
 
       resetAll();
       setConfirmOpen(false);
@@ -899,15 +918,25 @@ export default function PricesPage() {
                                   text: e.target.value,
                                 })
                               }
-                              onBlur={() =>
-                                setActive((a) =>
-                                  a &&
-                                  a.id === p.id &&
-                                  a.field === c.field
-                                    ? null
-                                    : a
-                                )
-                              }
+                              onBlur={() => {
+                                // Quitter la cellule sans appuyer sur Entrée valide quand même la saisie
+                                // (avant, la valeur tapée était perdue en silence).
+                                if (skipBlurCommit.current) {
+                                  skipBlurCommit.current = false;
+                                  setActive((a) =>
+                                    a && a.id === p.id && a.field === c.field ? null : a
+                                  );
+                                  return;
+                                }
+                                if (active && active.id === p.id && active.field === c.field) {
+                                  const parsed = parseInput(active.text);
+                                  const current = working(p)[c.field];
+                                  if (parsed !== "invalid" && parsed !== current) {
+                                    commit(p, c.field, active.text);
+                                  }
+                                  setActive(null);
+                                }
+                              }}
                               onKeyDown={(e) => {
                                 if (e.key === "Enter") {
                                   e.preventDefault();
