@@ -10,12 +10,20 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/common/EmptyState";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, paymentLabel } from "@/lib/utils";
 import toast from "react-hot-toast";
 import type { Product, Store, Customer, Sale } from "@/types";
 
 // Les 3 tarifs disponibles à la vente, définis sur la fiche produit.
 type PriceTier = "VENTE" | "GROSSISTE" | "REVENDEUR" | "PROMOTIONNEL";
+
+interface PaymentLine {
+  key: string;
+  method: string;
+  amount: string;
+}
+
+const PAYMENT_METHODS = ["ESPECES", "MOBILE_MONEY", "VIREMENT", "CARTE"] as const;
 
 interface CartLine {
   product: Product;
@@ -46,8 +54,9 @@ export default function SalesPosPage() {
   const [storeId, setStoreId] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [cart, setCart] = useState<CartLine[]>([]);
-  const [paymentMethod, setPaymentMethod] = useState("ESPECES");
-  const [paidAmount, setPaidAmount] = useState("");
+  // Paiement en plusieurs tranches : une ligne par mode (espèces, mobile money, virement...)
+  const newPaymentLine = (): PaymentLine => ({ key: Math.random().toString(36).slice(2), method: "ESPECES", amount: "" });
+  const [payments, setPayments] = useState<PaymentLine[]>(() => [newPaymentLine()]);
   const [saleType, setSaleType] = useState<"VENTE" | "DEVIS">("VENTE");
   const [receiptSale, setReceiptSale] = useState<Sale | null>(null);
 
@@ -89,16 +98,48 @@ export default function SalesPosPage() {
   const subtotal = cart.reduce((sum, l) => sum + l.quantity * l.unitPrice - l.discount, 0);
   const total = subtotal;
 
+  // Montants saisis. Une seule ligne laissée vide = le client paie le total (comportement habituel).
+  const parsedAmounts = payments.map((p) => (p.amount.trim() === "" ? 0 : Number(p.amount.replace(",", "."))));
+  const hasInvalidAmount = parsedAmounts.some((a) => !Number.isFinite(a) || a < 0);
+  const singleBlank = payments.length === 1 && payments[0].amount.trim() === "";
+  const paidSum = singleBlank ? total : parsedAmounts.reduce((sum, a) => sum + (Number.isFinite(a) ? a : 0), 0);
+  const remaining = total - paidSum;
+  const overpaid = paidSum > total + 0.0001;
+
+  function updatePayment(key: string, patch: Partial<PaymentLine>) {
+    setPayments((prev) => prev.map((p) => (p.key === key ? { ...p, ...patch } : p)));
+  }
+  function removePayment(key: string) {
+    setPayments((prev) => (prev.length > 1 ? prev.filter((p) => p.key !== key) : prev));
+  }
+  // Remplit une ligne avec ce qui reste à payer après les autres lignes
+  function fillRemaining(key: string) {
+    const others = payments.reduce((sum, p, i) => (p.key === key ? sum : sum + (Number.isFinite(parsedAmounts[i]) ? parsedAmounts[i] : 0)), 0);
+    updatePayment(key, { amount: String(Math.max(total - others, 0)) });
+  }
+
   const createSale = useMutation({
     mutationFn: async () => {
+      if (saleType === "VENTE") {
+        if (hasInvalidAmount) throw new Error("Un montant de paiement est invalide.");
+        if (overpaid) throw new Error("Le total des paiements dépasse le montant de la vente.");
+      }
+      const lines =
+        saleType === "DEVIS"
+          ? []
+          : singleBlank
+          ? total > 0
+            ? [{ method: payments[0].method, amount: total }]
+            : []
+          : payments.map((p, i) => ({ method: p.method, amount: parsedAmounts[i] })).filter((p) => p.amount > 0);
       const payload = {
         storeId: effectiveStoreId,
         customerId: customerId || null,
         type: saleType,
         items: cart.map((l) => ({ productId: l.product.id, quantity: l.quantity, unitPrice: l.unitPrice, discount: l.discount })),
         discount: 0,
-        paidAmount: saleType === "DEVIS" ? 0 : Number(paidAmount || total),
-        paymentMethod,
+        paidAmount: lines.reduce((sum, l) => sum + l.amount, 0),
+        payments: lines,
       };
       const { data } = await api.post<Sale>("/sales", payload);
       return data;
@@ -110,8 +151,12 @@ export default function SalesPosPage() {
       queryClient.invalidateQueries({ queryKey: ["stock"] });
       setReceiptSale(sale);
       setCart([]);
-      setPaidAmount("");
+      setPayments([newPaymentLine()]);
       setCustomerId("");
+    },
+    onError: (err: any) => {
+      // Les erreurs venant du serveur sont déjà affichées par l'intercepteur axios
+      if (!err?.response) toast.error(err?.message || "Une erreur est survenue.");
     },
   });
 
@@ -237,27 +282,80 @@ export default function SalesPosPage() {
                 </div>
                 {saleType === "VENTE" && (
                   <>
-                    <div>
-                      <Label>Mode de paiement</Label>
-                      <Select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
-                        <option value="ESPECES">Espèces</option>
-                        <option value="MOBILE_MONEY">Mobile Money</option>
-                        <option value="CARTE">Carte</option>
-                        <option value="VIREMENT">Virement</option>
-                        <option value="MIXTE">Mixte</option>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label>Montant payé</Label>
-                      <Input type="number" min={0} placeholder={String(total)} value={paidAmount} onChange={(e) => setPaidAmount(e.target.value)} />
-                      <p className="mt-1 text-xs text-muted-foreground">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label className="mb-0">Paiement</Label>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => setPayments((prev) => [...prev, newPaymentLine()])}
+                          disabled={payments.length >= 4}
+                        >
+                          <Plus className="h-3 w-3" />
+                          Ajouter un mode
+                        </Button>
+                      </div>
+
+                      {payments.map((p) => (
+                        <div key={p.key} className="flex items-center gap-1.5">
+                          <Select value={p.method} onChange={(e) => updatePayment(p.key, { method: e.target.value })} className="w-32 shrink-0">
+                            {PAYMENT_METHODS.map((m) => (
+                              <option key={m} value={m}>
+                                {paymentLabel(m)}
+                              </option>
+                            ))}
+                          </Select>
+                          <Input
+                            type="number"
+                            min={0}
+                            inputMode="decimal"
+                            placeholder={payments.length === 1 ? String(total) : "Montant"}
+                            value={p.amount}
+                            onChange={(e) => updatePayment(p.key, { amount: e.target.value })}
+                          />
+                          {payments.length > 1 && (
+                            <>
+                              <Button type="button" variant="outline" size="sm" className="h-9 px-2 text-xs" onClick={() => fillRemaining(p.key)} title="Mettre ce qui reste à payer">
+                                Solde
+                              </Button>
+                              <Button type="button" variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => removePayment(p.key)} aria-label="Retirer ce mode">
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      ))}
+
+                      <div className="space-y-0.5 rounded-md bg-secondary/50 p-2 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Payé</span>
+                          <span className="font-medium tabular-nums">{formatCurrency(paidSum, currency)}</span>
+                        </div>
+                        {overpaid ? (
+                          <p className="font-medium text-destructive">Le total payé dépasse le montant de la vente de {formatCurrency(paidSum - total, currency)}.</p>
+                        ) : (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Reste à payer</span>
+                            <span className={"font-medium tabular-nums " + (remaining > 0.0001 ? "text-warning" : "")}>{formatCurrency(Math.max(remaining, 0), currency)}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-muted-foreground">
                         Si le montant payé est inférieur au total, la différence devient une dette sur la fiche du client sélectionné.
                       </p>
+                      {remaining > 0.0001 && !customerId && (
+                        <p className="text-xs font-medium text-warning">
+                          Aucun client sélectionné : le reste à payer ne sera enregistré comme dette de personne.
+                        </p>
+                      )}
                     </div>
                   </>
                 )}
 
-                <Button className="w-full" size="lg" disabled={!cart.length} loading={createSale.isPending} onClick={() => createSale.mutate()}>
+                <Button className="w-full" size="lg" disabled={!cart.length || (saleType === "VENTE" && (overpaid || hasInvalidAmount))} loading={createSale.isPending} onClick={() => createSale.mutate()}>
                   {saleType === "DEVIS" ? "Créer le devis" : "Valider la vente"}
                 </Button>
               </div>
@@ -285,6 +383,26 @@ export default function SalesPosPage() {
                 <span>TOTAL</span>
                 <span>{formatCurrency(receiptSale.totalAmount, currency)}</span>
               </div>
+              {receiptSale.type === "VENTE" && (
+                <div className="space-y-1 border-t border-dashed border-border pt-2">
+                  {receiptSale.salePayments?.map((p) => (
+                    <div key={p.id} className="flex justify-between">
+                      <span>{paymentLabel(p.method)}</span>
+                      <span>{formatCurrency(p.amount, currency)}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between">
+                    <span>PAYÉ</span>
+                    <span>{formatCurrency(receiptSale.paidAmount, currency)}</span>
+                  </div>
+                  {receiptSale.totalAmount - receiptSale.paidAmount > 0.0001 && (
+                    <div className="flex justify-between font-semibold">
+                      <span>RESTE À PAYER</span>
+                      <span>{formatCurrency(receiptSale.totalAmount - receiptSale.paidAmount, currency)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
           <DialogFooter>
