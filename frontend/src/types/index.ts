@@ -8,6 +8,7 @@ export interface Company {
   phone?: string | null;
   email?: string | null;
   address?: string | null;
+  receiptFooter?: string | null;
   isActive?: boolean;
 }
 
@@ -109,6 +110,12 @@ export interface SaleItem {
   total: number;
 }
 
+export interface SalePayment {
+  id: string;
+  method: string;
+  amount: number;
+}
+
 export interface Sale {
   id: string;
   number: string;
@@ -125,6 +132,7 @@ export interface Sale {
   paidAmount: number;
   paymentMethod: string;
   items: SaleItem[];
+  salePayments?: SalePayment[];
   createdAt: string;
 }
 
