@@ -23,6 +23,7 @@ const updateSchema = z.object({
   phone: z.string().optional(),
   email: z.string().email().optional().or(z.literal("")),
   address: z.string().optional(),
+  receiptFooter: z.string().max(500).optional().nullable(),
 });
 
 router.put(
