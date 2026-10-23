@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Button } from "@/components/ui/button";
-import { Input, Label, Select } from "@/components/ui/input";
+import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import toast from "react-hot-toast";
 import type { Company } from "@/types";
@@ -15,7 +15,46 @@ export default function SettingsPage() {
   const user = useAuthStore((s) => s.user);
   const { data: company } = useQuery({ queryKey: ["settings"], queryFn: async () => (await api.get<Company>("/settings")).data });
 
-  const [form, setForm] = useState({ name: "", logo: "", currency: "XOF", phone: "", email: "", address: "" });
+  const logoInputRef = useRef<HTMLInputElement>(null);
+
+  // Charge une image depuis l'ordinateur, la réduit (max 300 px) et la garde dans la fiche entreprise.
+  // Ainsi le logo s'affiche toujours sur les devis et reçus, sans dépendre d'un lien externe.
+  function onLogoFile(file: File) {
+    if (!file.type.startsWith("image/")) {
+      toast.error("Choisissez un fichier image (PNG, JPG...).");
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, 300 / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        toast.error("Impossible de traiter cette image.");
+        URL.revokeObjectURL(url);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/png");
+      URL.revokeObjectURL(url);
+      if (dataUrl.length > 400_000) {
+        toast.error("Image trop lourde. Choisissez un logo plus simple.");
+        return;
+      }
+      setForm((f) => ({ ...f, logo: dataUrl }));
+      toast.success("Logo chargé. Cliquez sur « Enregistrer les modifications ».");
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      toast.error("Impossible de lire cette image.");
+    };
+    img.src = url;
+  }
+
+  const [form, setForm] = useState({ name: "", logo: "", currency: "XOF", phone: "", email: "", address: "", receiptFooter: "" });
 
   useEffect(() => {
     if (company) {
@@ -26,6 +65,7 @@ export default function SettingsPage() {
         phone: company.phone || "",
         email: company.email || "",
         address: company.address || "",
+        receiptFooter: company.receiptFooter || "",
       });
     }
   }, [company]);
@@ -54,9 +94,42 @@ export default function SettingsPage() {
             <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </div>
           <div>
-            <Label>Logo (URL)</Label>
-            <Input value={form.logo} onChange={(e) => setForm({ ...form, logo: e.target.value })} placeholder="https://..." />
-            {form.logo && <img src={form.logo} alt="Logo" className="mt-2 h-12 rounded-md border border-border object-contain p-1" />}
+            <Label>Logo</Label>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                ref={logoInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) onLogoFile(file);
+                  e.target.value = "";
+                }}
+              />
+              <Button type="button" variant="outline" onClick={() => logoInputRef.current?.click()}>
+                Choisir une image
+              </Button>
+              {form.logo && (
+                <Button type="button" variant="ghost" onClick={() => setForm({ ...form, logo: "" })}>
+                  Retirer le logo
+                </Button>
+              )}
+            </div>
+            {form.logo ? (
+              <img src={form.logo} alt="Logo" className="mt-2 h-16 rounded-md border border-border object-contain p-1" />
+            ) : (
+              <p className="mt-1 text-xs text-muted-foreground">Aucun logo. Choisissez une image depuis votre ordinateur (PNG ou JPG).</p>
+            )}
+            <details className="mt-2 text-xs text-muted-foreground">
+              <summary className="cursor-pointer">Ou utiliser un lien (URL) vers une image</summary>
+              <Input
+                className="mt-1.5"
+                value={form.logo.startsWith("data:") ? "" : form.logo}
+                onChange={(e) => setForm({ ...form, logo: e.target.value })}
+                placeholder="https://.../logo.png"
+              />
+            </details>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -82,6 +155,17 @@ export default function SettingsPage() {
           <div>
             <Label>Adresse</Label>
             <Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
+          </div>
+          <div>
+            <Label>Texte en bas des devis et reçus</Label>
+            <Textarea
+              rows={3}
+              maxLength={500}
+              value={form.receiptFooter}
+              onChange={(e) => setForm({ ...form, receiptFooter: e.target.value })}
+              placeholder="Ex. : Merci de votre confiance. Devis valable 15 jours. Paiement par Mobile Money : 70 00 00 00"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">Laissez vide pour afficher « Merci de votre confiance » sur les reçus.</p>
           </div>
           <Button loading={save.isPending} onClick={() => save.mutate()}>
             Enregistrer les modifications
