@@ -10,7 +10,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { StatCard } from "@/components/common/StatCard";
 import { EmptyState } from "@/components/common/EmptyState";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, paymentLabel } from "@/lib/utils";
 import { TrendingUp, ShoppingCart, Package, Wallet } from "lucide-react";
 
 interface Summary {
@@ -19,6 +19,7 @@ interface Summary {
   expenses: number;
   profit: number;
   expensesByCategory: { category: string; total: number }[];
+  paymentsByMethod: { method: string; total: number }[];
   sales: { id: string; number: string; totalAmount: number; createdAt: string }[];
   purchaseList: { id: string; number: string; totalAmount: number; createdAt: string }[];
 }
@@ -52,6 +53,9 @@ export default function AccountingPage() {
       ["Achats", data.purchases],
       ["Dépenses", data.expenses],
       ["Bénéfice", data.profit],
+      [],
+      ["Encaissements par mode de paiement"],
+      ...(data.paymentsByMethod ?? []).map((p) => [paymentLabel(p.method), p.total]),
       [],
       ["Ventes"],
       ["Numéro", "Date", "Montant"],
@@ -104,6 +108,33 @@ export default function AccountingPage() {
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <CardTitle>Encaissements par mode de paiement</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {!data.paymentsByMethod?.length ? (
+                  <EmptyState icon={Calculator} title="Aucun encaissement sur cette période" />
+                ) : (
+                  <div className="space-y-2">
+                    {data.paymentsByMethod.map((p) => (
+                      <div key={p.method} className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">
+                          {paymentLabel(p.method)}
+                          {p.method === "MIXTE" && " (anciennes ventes, non détaillé)"}
+                        </span>
+                        <span className="font-medium tabular-nums">{formatCurrency(p.total, currency)}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between border-t border-border pt-2 text-sm font-semibold">
+                      <span>Total encaissé</span>
+                      <span className="tabular-nums">{formatCurrency(data.paymentsByMethod.reduce((s, p) => s + p.total, 0), currency)}</span>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle>Dépenses par catégorie</CardTitle>
