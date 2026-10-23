@@ -33,6 +33,16 @@ const saleSchema = z.object({
   discount: z.number().min(0).default(0),
   paidAmount: z.number().min(0).default(0),
   paymentMethod: z.enum(["ESPECES", "MOBILE_MONEY", "CARTE", "VIREMENT", "MIXTE"]).default("ESPECES"),
+  // Paiement en plusieurs tranches (ex. espèces + mobile money). Prioritaire sur paidAmount/paymentMethod.
+  payments: z
+    .array(
+      z.object({
+        method: z.enum(["ESPECES", "MOBILE_MONEY", "CARTE", "VIREMENT"]),
+        amount: z.number().positive(),
+      })
+    )
+    .max(10)
+    .optional(),
 });
 
 router.get(
@@ -49,7 +59,7 @@ router.get(
     }
     const sales = await prisma.sale.findMany({
       where,
-      include: { customer: true, user: { select: { name: true } }, store: true, items: true },
+      include: { customer: true, user: { select: { name: true } }, store: true, items: true, salePayments: true },
       orderBy: { createdAt: "desc" },
       take: 300,
     });
@@ -62,7 +72,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const sale = await prisma.sale.findFirst({
       where: { id: req.params.id, ...scope(req) },
-      include: { customer: true, user: { select: { name: true } }, store: true, items: { include: { product: true } }, payments: true },
+      include: { customer: true, user: { select: { name: true } }, store: true, items: { include: { product: true } }, payments: true, salePayments: true },
     });
     if (!sale) throw new AppError("Vente introuvable.", 404);
     res.json(sale);
@@ -79,6 +89,22 @@ router.post(
 
     const subtotal = data.items.reduce((sum, it) => sum + it.quantity * it.unitPrice - it.discount, 0);
     const totalAmount = Math.max(subtotal - data.discount, 0);
+
+    // Tranches de paiement : nouveau format (payments[]) ou ancien format (un seul montant + un seul mode)
+    const isSale = data.type === "VENTE";
+    const paymentLines: { method: string; amount: number }[] = !isSale
+      ? []
+      : data.payments?.length
+      ? data.payments
+      : data.paidAmount > 0
+      ? [{ method: data.paymentMethod, amount: data.paidAmount }]
+      : [];
+    const paidAmount = isSale ? paymentLines.reduce((sum, p) => sum + p.amount, 0) : data.paidAmount;
+    if (isSale && paidAmount > totalAmount + 0.0001) {
+      throw new AppError("Le total des paiements dépasse le montant de la vente.", 400);
+    }
+    const distinctMethods = [...new Set(paymentLines.map((p) => p.method))];
+    const paymentMethod = distinctMethods.length > 1 ? "MIXTE" : distinctMethods[0] ?? data.paymentMethod;
 
     const sale = await prisma.$transaction(async (tx) => {
       // Vérifie et décrémente le stock uniquement pour les ventes réelles (pas devis)
@@ -104,8 +130,8 @@ router.post(
           subtotal,
           discount: data.discount,
           totalAmount,
-          paidAmount: data.paidAmount,
-          paymentMethod: data.paymentMethod,
+          paidAmount,
+          paymentMethod,
           items: {
             create: data.items.map((it) => ({
               productId: it.productId,
@@ -130,15 +156,27 @@ router.post(
           });
         }
 
-        if (data.customerId && data.paidAmount < totalAmount) {
-          await tx.customer.update({ where: { id: data.customerId }, data: { balance: { increment: totalAmount - data.paidAmount } } });
+        // Détail des paiements par mode (avec ou sans client enregistré)
+        if (paymentLines.length) {
+          await tx.salePayment.createMany({
+            data: paymentLines.map((p) => ({ companyId, saleId: created.id, method: p.method, amount: p.amount })),
+          });
         }
-        if (data.paidAmount > 0 && data.customerId) {
-          await tx.customerPayment.create({ data: { customerId: data.customerId, saleId: created.id, amount: data.paidAmount, method: data.paymentMethod } });
+
+        if (data.customerId && paidAmount < totalAmount) {
+          await tx.customer.update({ where: { id: data.customerId }, data: { balance: { increment: totalAmount - paidAmount } } });
+        }
+        if (data.customerId) {
+          for (const p of paymentLines) {
+            await tx.customerPayment.create({ data: { customerId: data.customerId, saleId: created.id, amount: p.amount, method: p.method } });
+          }
         }
       }
 
-      return created;
+      return tx.sale.findUniqueOrThrow({
+        where: { id: created.id },
+        include: { items: { include: { product: true } }, salePayments: true },
+      });
     });
 
     if (data.type === "VENTE") {
