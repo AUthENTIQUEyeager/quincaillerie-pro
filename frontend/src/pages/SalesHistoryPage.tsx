@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ClipboardList, Ban, Eye, X } from "lucide-react";
+import { ClipboardList, Ban, Eye, X, Printer } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -12,9 +12,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { EmptyState } from "@/components/common/EmptyState";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatCurrency, formatDateTime } from "@/lib/utils";
+import { formatCurrency, formatDateTime, paymentLabel } from "@/lib/utils";
 import toast from "react-hot-toast";
-import type { Sale } from "@/types";
+import { printSaleDocument } from "@/lib/printDocument";
+import type { Sale, Company } from "@/types";
 
 const statusVariant: Record<string, "success" | "destructive" | "warning"> = {
   VALIDEE: "success",
@@ -41,6 +42,23 @@ export default function SalesHistoryPage() {
       return (await api.get<Sale[]>("/sales", { params })).data;
     },
   });
+
+  const { data: company } = useQuery({ queryKey: ["settings"], queryFn: async () => (await api.get<Company>("/settings")).data });
+  const [printingId, setPrintingId] = useState<string | null>(null);
+
+  // Devis : proforma A4. Vente : ticket 80 mm. Charge d'abord le détail complet (produits, paiements).
+  async function printSale(id: string) {
+    setPrintingId(id);
+    try {
+      const sale = (await api.get<Sale>(`/sales/${id}`)).data;
+      const co = company ?? (await api.get<Company>("/settings")).data;
+      printSaleDocument(sale, co);
+    } catch {
+      // l'erreur est déjà affichée par l'intercepteur axios
+    } finally {
+      setPrintingId(null);
+    }
+  }
 
   const [cancelTarget, setCancelTarget] = useState<Sale | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -92,6 +110,7 @@ export default function SalesHistoryPage() {
               <TableHead>Client</TableHead>
               <TableHead>Vendeur</TableHead>
               <TableHead>Total</TableHead>
+              <TableHead>Paiement</TableHead>
               <TableHead>Statut</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -104,12 +123,18 @@ export default function SalesHistoryPage() {
                 <TableCell>{s.customer?.name || "Comptant"}</TableCell>
                 <TableCell className="text-muted-foreground">{s.user?.name || "—"}</TableCell>
                 <TableCell className="font-medium tabular-nums">{formatCurrency(s.totalAmount, currency)}</TableCell>
+                <TableCell className="text-muted-foreground">
+                  {s.type === "VENTE" ? paymentLabel(s.paymentMethod) : "—"}
+                </TableCell>
                 <TableCell>
                   <Badge variant={statusVariant[s.status] || "secondary"}>{s.status}</Badge>
                 </TableCell>
                 <TableCell className="text-right">
                   <Button variant="ghost" size="icon" onClick={() => setDetailId(s.id)} aria-label="Voir les détails">
                     <Eye className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" onClick={() => printSale(s.id)} disabled={printingId === s.id} aria-label={s.type === "DEVIS" ? "Imprimer le devis" : "Imprimer le reçu"} title={s.type === "DEVIS" ? "Imprimer le devis proforma (A4)" : "Imprimer le reçu (ticket)"}>
+                    <Printer className="h-4 w-4" />
                   </Button>
                   {s.status === "VALIDEE" && s.type === "VENTE" && (
                     <Button variant="ghost" size="icon" onClick={() => setCancelTarget(s)} aria-label="Annuler">
@@ -170,7 +195,7 @@ export default function SalesHistoryPage() {
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Mode de paiement</p>
-                  <p className="font-medium">{detail.paymentMethod}</p>
+                  <p className="font-medium">{paymentLabel(detail.paymentMethod)}</p>
                 </div>
               </div>
 
@@ -208,11 +233,37 @@ export default function SalesHistoryPage() {
                   <span className="text-muted-foreground">Payé</span>
                   <span className="tabular-nums">{formatCurrency(detail.paidAmount, currency)}</span>
                 </div>
+                {detail.type === "VENTE" && detail.totalAmount - detail.paidAmount > 0.0001 && (
+                  <div className="flex justify-between font-medium">
+                    <span className="text-muted-foreground">Reste à payer</span>
+                    <span className="tabular-nums">{formatCurrency(detail.totalAmount - detail.paidAmount, currency)}</span>
+                  </div>
+                )}
               </div>
+
+              {!!detail.salePayments?.length && (
+                <div>
+                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Paiements</p>
+                  <div className="rounded-md border border-border divide-y divide-border">
+                    {detail.salePayments.map((p) => (
+                      <div key={p.id} className="flex items-center justify-between px-3 py-2">
+                        <span>{paymentLabel(p.method)}</span>
+                        <span className="font-medium tabular-nums">{formatCurrency(p.amount, currency)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           <DialogFooter>
+            {detail && company && (
+              <Button variant="outline" onClick={() => printSaleDocument(detail, company)}>
+                <Printer className="h-4 w-4" />
+                {detail.type === "DEVIS" ? "Imprimer le devis" : "Imprimer le reçu"}
+              </Button>
+            )}
             <Button variant="outline" onClick={() => setDetailId(null)}>
               Fermer
             </Button>
