@@ -26,6 +26,7 @@ model Company {
   phone       String?
   email       String?
   address     String?
+  receiptFooter String? // texte libre en pied des devis et reçus
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -390,8 +391,9 @@ model Sale {
   paymentMethod String   @default("ESPECES") // ESPECES, MOBILE_MONEY, CARTE, VIREMENT, MIXTE
   createdAt     DateTime @default(now())
 
-  items    SaleItem[]
-  payments CustomerPayment[]
+  items        SaleItem[]
+  payments     CustomerPayment[]
+  salePayments SalePayment[]
 }
 
 model SaleItem {
@@ -520,4 +522,20 @@ model PriceChange {
 
   @@index([companyId, createdAt])
   @@index([productId])
+}
+
+// ---------------- PAIEMENTS D'UNE VENTE (multi-modes) ----------------
+// Une ligne par tranche payée : ex. 50 000 ESPECES + 30 000 MOBILE_MONEY pour une même vente.
+// Fonctionne aussi pour un client de passage (sans fiche client).
+model SalePayment {
+  id        String   @id @default(cuid())
+  companyId String
+  saleId    String
+  sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  method    String   // ESPECES, MOBILE_MONEY, CARTE, VIREMENT
+  amount    Float
+  createdAt DateTime @default(now())
+
+  @@index([saleId])
+  @@index([companyId, createdAt])
 }
