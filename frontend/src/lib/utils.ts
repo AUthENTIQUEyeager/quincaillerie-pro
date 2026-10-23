@@ -31,3 +31,15 @@ export function initials(name: string): string {
     .join("")
     .toUpperCase();
 }
+
+export const PAYMENT_LABELS: Record<string, string> = {
+  ESPECES: "Espèces",
+  MOBILE_MONEY: "Mobile Money",
+  CARTE: "Carte",
+  VIREMENT: "Virement",
+  MIXTE: "Mixte",
+};
+
+export function paymentLabel(method: string): string {
+  return PAYMENT_LABELS[method] ?? method;
+}
