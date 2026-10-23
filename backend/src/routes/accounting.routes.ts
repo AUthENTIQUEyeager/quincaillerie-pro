@@ -39,6 +39,21 @@ router.get(
       prisma.expense.aggregate({ where: expenseWhere, _sum: { amount: true } }),
     ]);
 
+    // Encaissements par mode de paiement (ventes validées de la période)
+    const [paymentRows, legacyRows] = await Promise.all([
+      prisma.salePayment.groupBy({ by: ["method"], where: { sale: saleWhere }, _sum: { amount: true } }),
+      // Anciennes ventes (avant le paiement multi-modes) : un seul mode, non détaillé
+      prisma.sale.groupBy({
+        by: ["paymentMethod"],
+        where: { ...saleWhere, salePayments: { none: {} }, paidAmount: { gt: 0 } },
+        _sum: { paidAmount: true },
+      }),
+    ]);
+    const byMethod = new Map<string, number>();
+    for (const r of paymentRows) byMethod.set(r.method, (byMethod.get(r.method) || 0) + (r._sum.amount || 0));
+    for (const r of legacyRows) byMethod.set(r.paymentMethod, (byMethod.get(r.paymentMethod) || 0) + (r._sum.paidAmount || 0));
+    const paymentsByMethod = [...byMethod.entries()].map(([method, total]) => ({ method, total })).sort((a, b) => b.total - a.total);
+
     const revenue = salesTotal._sum.totalAmount || 0;
     const purchasesSum = purchasesTotal._sum.totalAmount || 0;
     const expensesSum = expensesTotal._sum.amount || 0;
@@ -49,6 +64,7 @@ router.get(
       expenses: expensesSum,
       profit: revenue - purchasesSum - expensesSum,
       expensesByCategory: expensesByCategory.map((e) => ({ category: e.category, total: e._sum.amount })),
+      paymentsByMethod,
       sales,
       purchaseList: purchases,
     });
