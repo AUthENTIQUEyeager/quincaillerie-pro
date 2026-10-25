@@ -63,7 +63,7 @@ const moveSchema = z.object({
   productId: z.string(),
   storeId: z.string(),
   type: z.enum(["ENTREE", "SORTIE", "CORRECTION", "DOMMAGE"]),
-  quantity: z.number().int(),
+  quantity: z.number().refine((n) => n !== 0, "Quantité invalide."),
   reason: z.string().optional(),
 });
 router.post(
@@ -83,7 +83,7 @@ router.post(
         update: data.type === "DOMMAGE" ? { damaged: { increment: Math.abs(data.quantity) }, quantity: { increment: delta } } : { quantity: { increment: delta } },
         create: { productId: data.productId, storeId: data.storeId, quantity: Math.max(delta, 0) },
       });
-      if (stock.quantity < 0) throw new AppError("Stock insuffisant pour cette opération.", 400);
+      if (stock.quantity < -1e-9) throw new AppError("Stock insuffisant pour cette opération.", 400);
       const movement = await tx.stockMovement.create({
         data: {
           productId: data.productId,
@@ -118,7 +118,7 @@ router.post(
   })
 );
 
-const inventoryLineSchema = z.object({ productId: z.string(), countedQty: z.number().int().min(0) });
+const inventoryLineSchema = z.object({ productId: z.string(), countedQty: z.number().min(0) });
 router.post(
   "/inventories/:id/lines",
   requireRole("PROPRIETAIRE", "GERANT", "MAGASINIER"),
