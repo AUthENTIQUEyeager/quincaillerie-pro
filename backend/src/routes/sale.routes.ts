@@ -21,9 +21,14 @@ async function generateSaleNumber(companyId: string) {
 const saleItemSchema = z.object({
   productId: z.string(),
   quantity: z.number().positive(),
+  // Unité de vente choisie : absente ou égale à l'unité de base = vente à l'unité de base.
+  unit: z.string().optional().nullable(),
   unitPrice: z.number().min(0),
   discount: z.number().min(0).default(0),
 });
+
+// Arrondi pour éviter les dérives du type 0,1 + 0,2 = 0,30000000000000004
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
 
 const saleSchema = z.object({
   storeId: z.string(),
@@ -87,7 +92,26 @@ router.post(
     const store = await prisma.store.findFirst({ where: { id: data.storeId, companyId } });
     if (!store) throw new AppError("Dépôt invalide.", 400);
 
-    const subtotal = data.items.reduce((sum, it) => sum + it.quantity * it.unitPrice - it.discount, 0);
+    // Résout l'unité de chaque ligne côté serveur (le client ne décide jamais du facteur de conversion).
+    const products = await prisma.product.findMany({
+      where: { id: { in: [...new Set(data.items.map((i) => i.productId))] }, companyId },
+    });
+    const productById = new Map(products.map((p) => [p.id, p]));
+    const items = data.items.map((it) => {
+      const product = productById.get(it.productId);
+      if (!product) throw new AppError("Produit introuvable.", 400);
+      const wantsAlt = !!it.unit && !!product.altUnit && it.unit === product.altUnit;
+      if (it.unit && it.unit !== product.unit && !wantsAlt) {
+        throw new AppError(`Unité "${it.unit}" inconnue pour "${product.name}".`, 400);
+      }
+      const unitFactor = wantsAlt ? product.altUnitFactor ?? 1 : 1;
+      if (!product.allowDecimal && !Number.isInteger(it.quantity)) {
+        throw new AppError(`"${product.name}" se vend en quantités entières.`, 400);
+      }
+      return { ...it, unit: wantsAlt ? product.altUnit! : null, unitFactor, baseQty: round3(it.quantity * unitFactor) };
+    });
+
+    const subtotal = items.reduce((sum, it) => sum + it.quantity * it.unitPrice - it.discount, 0);
     const totalAmount = Math.max(subtotal - data.discount, 0);
 
     // Tranches de paiement : nouveau format (payments[]) ou ancien format (un seul montant + un seul mode)
@@ -109,11 +133,17 @@ router.post(
     const sale = await prisma.$transaction(async (tx) => {
       // Vérifie et décrémente le stock uniquement pour les ventes réelles (pas devis)
       if (data.type === "VENTE") {
-        for (const item of data.items) {
-          const stock = await tx.stock.findUnique({ where: { productId_storeId: { productId: item.productId, storeId: data.storeId } } });
-          if (!stock || stock.quantity < item.quantity) {
-            const product = await tx.product.findUnique({ where: { id: item.productId } });
-            throw new AppError(`Stock insuffisant pour "${product?.name ?? item.productId}".`, 400);
+        // Total demandé par produit (un même produit peut figurer sur 2 lignes, ex. sacs + tonne)
+        const needed = new Map<string, number>();
+        for (const item of items) needed.set(item.productId, round3((needed.get(item.productId) ?? 0) + item.baseQty));
+        for (const [productId, qty] of needed) {
+          const stock = await tx.stock.findUnique({ where: { productId_storeId: { productId, storeId: data.storeId } } });
+          if (!stock || stock.quantity < qty - 1e-9) {
+            const product = productById.get(productId);
+            throw new AppError(
+              `Stock insuffisant pour "${product?.name ?? productId}" (demandé : ${qty} ${product?.unit ?? ""}, disponible : ${round3(stock?.quantity ?? 0)}).`,
+              400
+            );
           }
         }
       }
@@ -133,9 +163,11 @@ router.post(
           paidAmount,
           paymentMethod,
           items: {
-            create: data.items.map((it) => ({
+            create: items.map((it) => ({
               productId: it.productId,
               quantity: it.quantity,
+              unit: it.unit,
+              unitFactor: it.unitFactor,
               unitPrice: it.unitPrice,
               discount: it.discount,
               total: it.quantity * it.unitPrice - it.discount,
@@ -146,13 +178,13 @@ router.post(
       });
 
       if (data.type === "VENTE") {
-        for (const item of data.items) {
+        for (const item of items) {
           await tx.stock.update({
             where: { productId_storeId: { productId: item.productId, storeId: data.storeId } },
-            data: { quantity: { decrement: item.quantity } },
+            data: { quantity: { decrement: item.baseQty } },
           });
           await tx.stockMovement.create({
-            data: { productId: item.productId, storeId: data.storeId, type: "VENTE", quantity: -item.quantity, reference: created.number, userId: req.auth!.userId },
+            data: { productId: item.productId, storeId: data.storeId, type: "VENTE", quantity: -item.baseQty, reference: created.number, userId: req.auth!.userId },
           });
         }
 
@@ -199,10 +231,10 @@ router.post(
       for (const item of sale.items) {
         await tx.stock.update({
           where: { productId_storeId: { productId: item.productId, storeId: sale.storeId } },
-          data: { quantity: { increment: item.quantity } },
+          data: { quantity: { increment: round3(item.quantity * item.unitFactor) } },
         });
         await tx.stockMovement.create({
-          data: { productId: item.productId, storeId: sale.storeId, type: "RETOUR", quantity: item.quantity, reference: sale.number, userId: req.auth!.userId },
+          data: { productId: item.productId, storeId: sale.storeId, type: "RETOUR", quantity: round3(item.quantity * item.unitFactor), reference: sale.number, userId: req.auth!.userId },
         });
       }
       await tx.sale.update({ where: { id: sale.id }, data: { status: "ANNULEE" } });
