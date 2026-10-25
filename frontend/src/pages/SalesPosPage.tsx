@@ -10,7 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/common/EmptyState";
-import { formatCurrency, paymentLabel } from "@/lib/utils";
+import { formatCurrency, formatQty, itemUnit, paymentLabel } from "@/lib/utils";
 import toast from "react-hot-toast";
 import type { Product, Store, Customer, Sale } from "@/types";
 
@@ -26,8 +26,10 @@ interface PaymentLine {
 const PAYMENT_METHODS = ["ESPECES", "MOBILE_MONEY", "VIREMENT", "CARTE"] as const;
 
 interface CartLine {
+  key: string;
   product: Product;
-  quantity: number;
+  unit: string | null; // null = unité de base du produit, sinon la 2e unité (tonne, paquet...)
+  qty: string; // texte saisi (permet de taper 2,5)
   unitPrice: number;
   discount: number;
   priceTier: PriceTier;
@@ -40,6 +42,27 @@ function priceForTier(product: Product, tier: PriceTier): number {
   if (tier === "REVENDEUR") return product.resellerPrice ?? product.sellingPrice;
   if (tier === "PROMOTIONNEL") return product.promoPrice ?? product.sellingPrice;
   return product.sellingPrice;
+}
+
+// Prix d'une unité alternative : prix saisi sur la fiche produit, sinon prix de base x équivalence.
+function altPrice(product: Product): number {
+  return product.altSellingPrice ?? product.sellingPrice * (product.altUnitFactor ?? 1);
+}
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
+// Quantité saisie (0 si invalide)
+function qtyOf(l: CartLine): number {
+  const n = Number(l.qty.replace(",", "."));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+// Quantité retirée du stock, en unité de base
+function baseQtyOf(l: CartLine): number {
+  return round3(qtyOf(l) * (l.unit ? l.product.altUnitFactor ?? 1 : 1));
+}
+function qtyError(l: CartLine): string | null {
+  const q = qtyOf(l);
+  if (q <= 0) return "Quantité invalide";
+  if (!l.product.allowDecimal && !Number.isInteger(q)) return "Quantité entière uniquement";
+  return null;
 }
 
 export default function SalesPosPage() {
@@ -75,27 +98,64 @@ export default function SalesPosPage() {
 
   function addToCart(product: Product) {
     setCart((prev) => {
-      const existing = prev.find((l) => l.product.id === product.id);
+      // Même produit, même unité : on augmente la quantité de la ligne existante
+      const existing = prev.find((l) => l.product.id === product.id && l.unit === null);
       if (existing) {
-        return prev.map((l) => (l.product.id === product.id ? { ...l, quantity: l.quantity + 1 } : l));
+        return prev.map((l) => (l.key === existing.key ? { ...l, qty: String(round3(qtyOf(l) + 1)) } : l));
       }
-      return [...prev, { product, quantity: 1, unitPrice: product.sellingPrice, discount: 0, priceTier: "VENTE" }];
+      return [
+        ...prev,
+        { key: Math.random().toString(36).slice(2), product, unit: null, qty: "1", unitPrice: product.sellingPrice, discount: 0, priceTier: "VENTE" },
+      ];
     });
   }
 
-  function updateQty(productId: string, delta: number) {
-    setCart((prev) => prev.map((l) => (l.product.id === productId ? { ...l, quantity: Math.max(1, l.quantity + delta) } : l)));
+  // Boutons + / - : ajoutent ou retirent 1 (jamais en dessous de 1 pour ne pas tomber à 0)
+  function stepQty(key: string, delta: number) {
+    setCart((prev) =>
+      prev.map((l) => {
+        if (l.key !== key) return l;
+        const next = round3(qtyOf(l) + delta);
+        return next >= 1 || (delta > 0 && next > 0) ? { ...l, qty: String(next) } : l;
+      })
+    );
   }
 
-  function setLineTier(productId: string, tier: PriceTier) {
-    setCart((prev) => prev.map((l) => (l.product.id === productId ? { ...l, priceTier: tier, unitPrice: priceForTier(l.product, tier) } : l)));
+  // Saisie directe de la quantité (accepte la virgule)
+  function setQtyText(key: string, text: string) {
+    if (!/^\d*[.,]?\d*$/.test(text)) return;
+    setCart((prev) => prev.map((l) => (l.key === key ? { ...l, qty: text } : l)));
   }
 
-  function removeLine(productId: string) {
-    setCart((prev) => prev.filter((l) => l.product.id !== productId));
+  function setLineUnit(key: string, unit: string | null) {
+    setCart((prev) =>
+      prev.map((l) =>
+        l.key !== key
+          ? l
+          : unit
+          ? { ...l, unit, priceTier: "VENTE", unitPrice: altPrice(l.product) }
+          : { ...l, unit: null, priceTier: "VENTE", unitPrice: priceForTier(l.product, "VENTE") }
+      )
+    );
   }
 
-  const subtotal = cart.reduce((sum, l) => sum + l.quantity * l.unitPrice - l.discount, 0);
+  function setLineTier(key: string, tier: PriceTier) {
+    setCart((prev) => prev.map((l) => (l.key === key ? { ...l, priceTier: tier, unitPrice: priceForTier(l.product, tier) } : l)));
+  }
+
+  function removeLine(key: string) {
+    setCart((prev) => prev.filter((l) => l.key !== key));
+  }
+
+  // Stock demandé par produit (en unité de base) comparé au stock disponible
+  const stockDemand = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const l of cart) m.set(l.product.id, round3((m.get(l.product.id) ?? 0) + baseQtyOf(l)));
+    return m;
+  }, [cart]);
+  const cartHasInvalidQty = cart.some((l) => qtyError(l) !== null);
+
+  const subtotal = cart.reduce((sum, l) => sum + qtyOf(l) * l.unitPrice - l.discount, 0);
   const total = subtotal;
 
   // Montants saisis. Une seule ligne laissée vide = le client paie le total (comportement habituel).
@@ -120,6 +180,7 @@ export default function SalesPosPage() {
 
   const createSale = useMutation({
     mutationFn: async () => {
+      if (cartHasInvalidQty) throw new Error("Une quantité est invalide (vérifiez les lignes en rouge).");
       if (saleType === "VENTE") {
         if (hasInvalidAmount) throw new Error("Un montant de paiement est invalide.");
         if (overpaid) throw new Error("Le total des paiements dépasse le montant de la vente.");
@@ -136,7 +197,7 @@ export default function SalesPosPage() {
         storeId: effectiveStoreId,
         customerId: customerId || null,
         type: saleType,
-        items: cart.map((l) => ({ productId: l.product.id, quantity: l.quantity, unitPrice: l.unitPrice, discount: l.discount })),
+        items: cart.map((l) => ({ productId: l.product.id, quantity: qtyOf(l), unit: l.unit, unitPrice: l.unitPrice, discount: l.discount })),
         discount: 0,
         paidAmount: lines.reduce((sum, l) => sum + l.amount, 0),
         payments: lines,
@@ -195,8 +256,9 @@ export default function SalesPosPage() {
                 <span className="mt-1 text-xs text-muted-foreground">{p.sku}</span>
                 <span className="mt-2 font-display text-sm font-semibold text-primary">{formatCurrency(p.sellingPrice, currency)}</span>
                 <Badge variant={(p.totalStock ?? 0) > p.minStock ? "secondary" : "warning"} className="mt-1.5">
-                  {p.totalStock ?? 0} {p.unit}
+                  {formatQty(p.totalStock ?? 0)} {p.unit}
                 </Badge>
+                {p.altUnit && <span className="mt-1 text-[11px] text-muted-foreground">Aussi en {p.altUnit}</span>}
               </button>
             ))}
             {!filteredProducts.length && (
@@ -226,38 +288,72 @@ export default function SalesPosPage() {
                 {cart.length === 0 ? (
                   <p className="py-8 text-center text-sm text-muted-foreground">Panier vide</p>
                 ) : (
-                  cart.map((l) => (
-                    <div key={l.product.id} className="space-y-1.5 rounded-md border border-border p-2">
-                      <div className="flex items-center gap-2">
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium">{l.product.name}</p>
-                          <p className="text-xs text-muted-foreground">{formatCurrency(l.unitPrice, currency)}</p>
+                  cart.map((l) => {
+                    const err = qtyError(l);
+                    const unitLabel = l.unit ?? l.product.unit;
+                    const overStock = (stockDemand.get(l.product.id) ?? 0) > (l.product.totalStock ?? 0) + 1e-9;
+                    return (
+                      <div key={l.key} className="space-y-1.5 rounded-md border border-border p-2">
+                        <div className="flex items-center gap-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium">{l.product.name}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {formatCurrency(l.unitPrice, currency)} / {unitLabel}
+                            </p>
+                          </div>
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => removeLine(l.key)}>
+                            <Trash2 className="h-3 w-3 text-destructive" />
+                          </Button>
                         </div>
-                        <div className="flex items-center gap-1">
-                          <Button variant="outline" size="icon" className="h-6 w-6" onClick={() => updateQty(l.product.id, -1)}>
+                        <div className="flex items-center gap-1.5">
+                          <Button variant="outline" size="icon" className="h-7 w-7 shrink-0" onClick={() => stepQty(l.key, -1)} aria-label="Moins">
                             <Minus className="h-3 w-3" />
                           </Button>
-                          <span className="w-6 text-center text-sm tabular-nums">{l.quantity}</span>
-                          <Button variant="outline" size="icon" className="h-6 w-6" onClick={() => updateQty(l.product.id, 1)}>
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            value={l.qty}
+                            onChange={(e) => setQtyText(l.key, e.target.value)}
+                            onFocus={(e) => e.target.select()}
+                            aria-label="Quantité"
+                            className={"h-7 w-16 px-1 text-center text-sm tabular-nums " + (err ? "border-destructive" : "")}
+                          />
+                          <Button variant="outline" size="icon" className="h-7 w-7 shrink-0" onClick={() => stepQty(l.key, 1)} aria-label="Plus">
                             <Plus className="h-3 w-3" />
                           </Button>
+                          {l.product.altUnit ? (
+                            <Select value={l.unit ?? ""} onChange={(e) => setLineUnit(l.key, e.target.value || null)} className="h-7 min-w-0 flex-1 px-1.5 text-xs">
+                              <option value="">{l.product.unit}</option>
+                              <option value={l.product.altUnit}>
+                                {l.product.altUnit} (= {formatQty(l.product.altUnitFactor ?? 1)} {l.product.unit})
+                              </option>
+                            </Select>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">{l.product.unit}</span>
+                          )}
+                          <span className="ml-auto shrink-0 text-sm font-medium tabular-nums">{formatCurrency(qtyOf(l) * l.unitPrice - l.discount, currency)}</span>
                         </div>
-                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => removeLine(l.product.id)}>
-                          <Trash2 className="h-3 w-3 text-destructive" />
-                        </Button>
+                        {err && <p className="text-xs font-medium text-destructive">{err}</p>}
+                        {!err && overStock && saleType === "VENTE" && (
+                          <p className="text-xs font-medium text-destructive">
+                            Stock insuffisant : {formatQty(stockDemand.get(l.product.id) ?? 0)} {l.product.unit} demandés, {formatQty(l.product.totalStock ?? 0)} disponibles.
+                          </p>
+                        )}
+                        {l.unit === null && (
+                          <Select
+                            value={l.priceTier}
+                            onChange={(e) => setLineTier(l.key, e.target.value as PriceTier)}
+                            className="h-6 px-1.5 text-[11px]"
+                          >
+                            <option value="VENTE">Prix de vente</option>
+                            <option value="GROSSISTE">Prix grossiste{l.product.wholesalePrice == null ? " (indispo → vente)" : ""}</option>
+                            <option value="REVENDEUR">Prix revendeur{l.product.resellerPrice == null ? " (indispo → vente)" : ""}</option>
+                            <option value="PROMOTIONNEL">Prix promotionnel{l.product.promoPrice == null ? " (indispo → vente)" : ""}</option>
+                          </Select>
+                        )}
                       </div>
-                      <Select
-                        value={l.priceTier}
-                        onChange={(e) => setLineTier(l.product.id, e.target.value as PriceTier)}
-                        className="h-6 px-1.5 text-[11px]"
-                      >
-                        <option value="VENTE">Prix de vente</option>
-                        <option value="GROSSISTE">Prix grossiste{l.product.wholesalePrice == null ? " (indispo → vente)" : ""}</option>
-                        <option value="REVENDEUR">Prix revendeur{l.product.resellerPrice == null ? " (indispo → vente)" : ""}</option>
-                        <option value="PROMOTIONNEL">Prix promotionnel{l.product.promoPrice == null ? " (indispo → vente)" : ""}</option>
-                      </Select>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
 
@@ -355,7 +451,7 @@ export default function SalesPosPage() {
                   </>
                 )}
 
-                <Button className="w-full" size="lg" disabled={!cart.length || (saleType === "VENTE" && (overpaid || hasInvalidAmount))} loading={createSale.isPending} onClick={() => createSale.mutate()}>
+                <Button className="w-full" size="lg" disabled={!cart.length || cartHasInvalidQty || (saleType === "VENTE" && (overpaid || hasInvalidAmount))} loading={createSale.isPending} onClick={() => createSale.mutate()}>
                   {saleType === "DEVIS" ? "Créer le devis" : "Valider la vente"}
                 </Button>
               </div>
@@ -374,7 +470,7 @@ export default function SalesPosPage() {
               {receiptSale.items.map((it) => (
                 <div key={it.id} className="flex justify-between">
                   <span>
-                    {it.quantity} x {it.product?.name || it.productId}
+                    {formatQty(it.quantity)} {itemUnit(it)} x {it.product?.name || it.productId}
                   </span>
                   <span>{formatCurrency(it.total, currency)}</span>
                 </div>
