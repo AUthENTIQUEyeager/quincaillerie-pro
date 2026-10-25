@@ -1,4 +1,4 @@
-import { formatCurrency, formatDate, formatDateTime, paymentLabel } from "@/lib/utils";
+import { formatCurrency, formatDate, formatDateTime, formatQty, itemUnit, paymentLabel } from "@/lib/utils";
 import type { Company, Sale } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -92,8 +92,8 @@ export function buildProformaHtml(sale: Sale, company: Company): string {
       (it, i) => `
       <tr>
         <td class="c">${i + 1}</td>
-        <td>${esc(it.product?.name ?? it.productId)}${it.product?.unit ? ` <span class="muted">(${esc(it.product.unit)})</span>` : ""}</td>
-        <td class="r">${esc(it.quantity)}</td>
+        <td>${esc(it.product?.name ?? it.productId)}</td>
+        <td class="r">${esc(formatQty(it.quantity))}${itemUnit(it) ? ` <span class="muted">${esc(itemUnit(it))}</span>` : ""}</td>
         <td class="r">${money(it.unitPrice)}</td>
         <td class="r">${it.discount > 0 ? money(it.discount) : "—"}</td>
         <td class="r b">${money(it.total)}</td>
@@ -172,7 +172,7 @@ export function buildReceiptHtml(sale: Sale, company: Company): string {
       (it) => `
       <div class="item">
         <div>${esc(it.product?.name ?? it.productId)}</div>
-        <div class="row"><span>${esc(it.quantity)} x ${money(it.unitPrice)}${it.discount > 0 ? ` (remise ${money(it.discount)})` : ""}</span><span class="b">${money(it.total)}</span></div>
+        <div class="row"><span>${esc(formatQty(it.quantity))}${itemUnit(it) ? ` ${esc(itemUnit(it))}` : ""} x ${money(it.unitPrice)}${it.discount > 0 ? ` (remise ${money(it.discount)})` : ""}</span><span class="b">${money(it.total)}</span></div>
       </div>`
     )
     .join("");
