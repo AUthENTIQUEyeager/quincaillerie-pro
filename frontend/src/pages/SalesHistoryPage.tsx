@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { EmptyState } from "@/components/common/EmptyState";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatCurrency, formatDateTime, paymentLabel } from "@/lib/utils";
+import { formatCurrency, formatDateTime, formatQty, itemUnit, paymentLabel } from "@/lib/utils";
 import toast from "react-hot-toast";
 import { printSaleDocument } from "@/lib/printDocument";
 import type { Sale, Company } from "@/types";
@@ -207,7 +207,7 @@ export default function SalesHistoryPage() {
                       <div className="min-w-0">
                         <p className="truncate font-medium">{it.product?.name || it.productId}</p>
                         <p className="text-xs text-muted-foreground">
-                          {it.quantity} x {formatCurrency(it.unitPrice, currency)}
+                          {formatQty(it.quantity)} {itemUnit(it)} x {formatCurrency(it.unitPrice, currency)}
                         </p>
                       </div>
                       <p className="shrink-0 font-medium tabular-nums">{formatCurrency(it.total, currency)}</p>
