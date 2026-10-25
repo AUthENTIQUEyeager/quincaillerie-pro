@@ -185,6 +185,11 @@ model Product {
   supplier        Supplier? @relation(fields: [supplierId], references: [id])
   description     String?
   unit            String   @default("unité") // pièce, kg, litre, sac...
+  // 2e unité de vente (ex. tonne pour le ciment en sacs). Le stock reste compté dans `unit`.
+  altUnit         String?
+  altUnitFactor   Float?   // 1 altUnit = altUnitFactor x unit (ex. 1 tonne = 20 sacs)
+  altSellingPrice Float?   // prix de vente d'1 altUnit
+  allowDecimal    Boolean  @default(false) // autorise 2,5 m / 1,5 kg...
   purchasePrice   Float    @default(0)
   sellingPrice    Float    @default(0)
   wholesalePrice  Float?
@@ -257,9 +262,9 @@ model Stock {
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
   storeId   String
   store     Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  quantity      Int @default(0) // disponible
-  reserved      Int @default(0)
-  damaged       Int @default(0)
+  quantity      Float @default(0) // disponible (dans l'unité de base)
+  reserved      Float @default(0)
+  damaged       Float @default(0)
 
   @@unique([productId, storeId])
 }
@@ -271,7 +276,7 @@ model StockMovement {
   storeId   String
   store     Store    @relation(fields: [storeId], references: [id])
   type      String   // ENTREE, SORTIE, CORRECTION, INVENTAIRE, TRANSFERT, VENTE, RETOUR, DOMMAGE
-  quantity  Int
+  quantity  Float
   reason    String?
   reference String?  // ex: numéro de vente/achat lié
   userId    String?
@@ -293,9 +298,9 @@ model InventoryLine {
   inventoryId String
   inventory   Inventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
   productId   String
-  expectedQty Int
-  countedQty  Int
-  difference  Int
+  expectedQty Float
+  countedQty  Float
+  difference  Float
 }
 
 model Transfer {
@@ -398,7 +403,9 @@ model SaleItem {
   sale      Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
   productId String
   product   Product @relation(fields: [productId], references: [id])
-  quantity  Int
+  quantity  Float   // dans l'unité de vente choisie (`unit`)
+  unit      String? // unité de vente (null = unité de base du produit)
+  unitFactor Float  @default(1) // nb d'unités de base par unité de vente
   unitPrice Float
   discount  Float   @default(0)
   total     Float
@@ -443,7 +450,7 @@ model PurchaseItem {
   purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
   productId  String
   product    Product  @relation(fields: [productId], references: [id])
-  quantity   Int
+  quantity   Float
   unitPrice  Float
   total      Float
 }
