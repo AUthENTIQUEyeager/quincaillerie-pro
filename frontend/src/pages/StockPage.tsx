@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/common/EmptyState";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime, formatQty } from "@/lib/utils";
 import toast from "react-hot-toast";
 import type { StockRow, Product, Store } from "@/types";
 
@@ -133,10 +133,10 @@ export default function StockPage() {
                           <p className="text-xs text-muted-foreground">{s.product.sku}</p>
                         </TableCell>
                         <TableCell className="tabular-nums">
-                          {s.quantity} {s.product.unit}
+                          {formatQty(s.quantity)} {s.product.unit}
                         </TableCell>
-                        <TableCell className="tabular-nums text-muted-foreground">{s.reserved}</TableCell>
-                        <TableCell className="tabular-nums text-muted-foreground">{s.damaged}</TableCell>
+                        <TableCell className="tabular-nums text-muted-foreground">{formatQty(s.reserved)}</TableCell>
+                        <TableCell className="tabular-nums text-muted-foreground">{formatQty(s.damaged)}</TableCell>
                         <TableCell>
                           {s.quantity <= s.product.minStock ? <Badge variant="warning">Stock faible</Badge> : <Badge variant="success">OK</Badge>}
                         </TableCell>
@@ -184,7 +184,7 @@ export default function StockPage() {
                     <TableCell>
                       <Badge variant="outline">{m.type}</Badge>
                     </TableCell>
-                    <TableCell className={m.quantity < 0 ? "text-destructive" : "text-success"}>{m.quantity > 0 ? `+${m.quantity}` : m.quantity}</TableCell>
+                    <TableCell className={m.quantity < 0 ? "text-destructive" : "text-success"}>{m.quantity > 0 ? `+${formatQty(m.quantity)}` : formatQty(m.quantity)}</TableCell>
                     <TableCell className="text-muted-foreground">{m.reason || m.reference || "—"}</TableCell>
                   </TableRow>
                 ))}
@@ -271,7 +271,7 @@ export default function StockPage() {
               </div>
               <div>
                 <Label>Quantité</Label>
-                <Input type="number" min={1} value={form.quantity} onChange={(e) => setForm({ ...form, quantity: Number(e.target.value) })} />
+                <Input type="number" min={0} step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: Number(e.target.value) })} />
               </div>
             </div>
             <div>
