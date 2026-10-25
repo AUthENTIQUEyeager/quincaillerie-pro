@@ -13,7 +13,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn, formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency, formatQty } from "@/lib/utils";
 import toast from "react-hot-toast";
 import type { Product, Category, Brand, Supplier } from "@/types";
 
@@ -27,6 +27,10 @@ const emptyForm = {
   brandId: "",
   supplierId: "",
   unit: "unité",
+  altUnit: "",
+  altUnitFactor: "",
+  altSellingPrice: "",
+  allowDecimal: false,
   description: "",
   purchasePrice: 0,
   sellingPrice: 0,
@@ -83,7 +87,12 @@ export default function ProductsPage() {
         minStock: Number(form.minStock),
         maxStock: form.maxStock ? Number(form.maxStock) : null,
         photoUrl: form.photoUrl || null,
+        altUnit: form.altUnit.trim() || null,
+        altUnitFactor: form.altUnit.trim() && form.altUnitFactor ? Number(String(form.altUnitFactor).replace(",", ".")) : null,
+        altSellingPrice: form.altUnit.trim() && form.altSellingPrice !== "" ? Number(String(form.altSellingPrice).replace(",", ".")) : null,
+        allowDecimal: form.allowDecimal,
       };
+      if (payload.altUnit && !payload.altUnitFactor) throw new Error("Indiquez combien d'unités de base contient la 2e unité.");
       if (editing) return api.put(`/products/${editing.id}`, payload);
       return api.post("/products", payload);
     },
@@ -91,6 +100,10 @@ export default function ProductsPage() {
       toast.success(editing ? "Produit mis à jour" : "Produit créé");
       queryClient.invalidateQueries({ queryKey: ["products"] });
       setDialogOpen(false);
+    },
+    onError: (err: any) => {
+      // Les erreurs du serveur sont déjà affichées par l'intercepteur axios ; on affiche ici les erreurs locales.
+      if (!err?.response) toast.error(err?.message || "Une erreur est survenue.");
     },
   });
 
@@ -121,6 +134,10 @@ export default function ProductsPage() {
       brandId: p.brandId || "",
       supplierId: p.supplierId || "",
       unit: p.unit,
+      altUnit: p.altUnit || "",
+      altUnitFactor: p.altUnitFactor?.toString() || "",
+      altSellingPrice: p.altSellingPrice?.toString() || "",
+      allowDecimal: !!p.allowDecimal,
       description: p.description || "",
       purchasePrice: p.purchasePrice,
       sellingPrice: p.sellingPrice,
@@ -190,7 +207,7 @@ export default function ProductsPage() {
                 <TableCell className="font-medium tabular-nums">{formatCurrency(p.sellingPrice, currency)}</TableCell>
                 <TableCell>
                   <Badge variant={(p.totalStock ?? 0) <= p.minStock ? "warning" : "secondary"}>
-                    {p.totalStock ?? 0} {p.unit}
+                    {formatQty(p.totalStock ?? 0)} {p.unit}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-right">
@@ -241,6 +258,30 @@ export default function ProductsPage() {
                 <div>
                   <Label>Unité</Label>
                   <Input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="unité, kg, sac..." />
+                </div>
+                <div className="col-span-2 rounded-md border border-border p-3">
+                  <p className="mb-2 text-sm font-medium">Vendre aussi dans une autre mesure (facultatif)</p>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <Label>2e unité</Label>
+                      <Input value={form.altUnit} onChange={(e) => setForm({ ...form, altUnit: e.target.value })} placeholder="tonne, paquet, rouleau..." />
+                    </div>
+                    <div>
+                      <Label>1 {form.altUnit || "2e unité"} = combien de « {form.unit || "unité"} » ?</Label>
+                      <Input type="number" min={0} step="any" disabled={!form.altUnit.trim()} value={form.altUnitFactor} onChange={(e) => setForm({ ...form, altUnitFactor: e.target.value })} placeholder="ex. 20" />
+                    </div>
+                    <div>
+                      <Label>Prix de vente d'1 {form.altUnit || "2e unité"}</Label>
+                      <Input type="number" min={0} step="any" disabled={!form.altUnit.trim()} value={form.altSellingPrice} onChange={(e) => setForm({ ...form, altSellingPrice: e.target.value })} placeholder="auto si vide" />
+                    </div>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Le stock est toujours compté en « {form.unit || "unité"} ». Vendre 1 {form.altUnit || "2e unité"} retire automatiquement {form.altUnitFactor || "…"} {form.unit || "unité"} du stock.
+                  </p>
+                  <label className="mt-2 flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={form.allowDecimal} onChange={(e) => setForm({ ...form, allowDecimal: e.target.checked })} className="h-4 w-4 rounded border-input" />
+                    Autoriser les quantités avec virgule (ex. 2,5 m ; 1,5 kg)
+                  </label>
                 </div>
                 <div>
                   <Label>Catégorie</Label>
