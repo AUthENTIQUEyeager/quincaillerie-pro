@@ -23,6 +23,10 @@ const productSchema = z.object({
   supplierId: z.string().optional().nullable(),
   description: z.string().optional(),
   unit: z.string().default("unité"),
+  altUnit: z.string().trim().min(1).optional().nullable(),
+  altUnitFactor: z.number().positive().optional().nullable(),
+  altSellingPrice: z.number().min(0).optional().nullable(),
+  allowDecimal: z.boolean().default(false),
   purchasePrice: z.number().min(0).default(0),
   sellingPrice: z.number().min(0).default(0),
   wholesalePrice: z.number().min(0).optional().nullable(),
@@ -35,6 +39,18 @@ const productSchema = z.object({
   photoUrl: z.string().optional().nullable(),
   images: z.array(z.string()).optional(), // urls
 });
+
+// Une 2e unité n'a de sens qu'avec son équivalence en unité de base.
+function checkAltUnit(d: { unit?: string; altUnit?: string | null; altUnitFactor?: number | null }) {
+  if (d.altUnit && !d.altUnitFactor) throw new AppError("Indiquez combien d'unités de base contient la 2e unité.", 400);
+  if (d.altUnit && d.unit && d.altUnit.trim().toLowerCase() === d.unit.trim().toLowerCase()) {
+    throw new AppError("La 2e unité doit être différente de l'unité de base.", 400);
+  }
+}
+function cleanAltUnit<T extends { altUnit?: string | null; altUnitFactor?: number | null; altSellingPrice?: number | null }>(d: T): T {
+  if (d.altUnit === null || d.altUnit === "") return { ...d, altUnit: null, altUnitFactor: null, altSellingPrice: null };
+  return d;
+}
 
 router.get(
   "/",
@@ -91,7 +107,9 @@ router.get(
 router.post(
   "/",
   asyncHandler(async (req, res) => {
-    const { images, ...data } = productSchema.parse(req.body);
+    const { images, ...parsed } = productSchema.parse(req.body);
+    checkAltUnit(parsed);
+    const data = cleanAltUnit(parsed);
     const companyId = req.auth!.companyId!;
 
     const existingSku = await prisma.product.findUnique({ where: { sku: data.sku } });
@@ -121,9 +139,15 @@ router.post(
 router.put(
   "/:id",
   asyncHandler(async (req, res) => {
-    const { images, ...data } = productSchema.partial().parse(req.body);
+    const { images, ...parsed } = productSchema.partial().parse(req.body);
     const existing = await prisma.product.findFirst({ where: { id: req.params.id, ...scope(req) } });
     if (!existing) throw new AppError("Produit introuvable.", 404);
+    checkAltUnit({
+      unit: parsed.unit ?? existing.unit,
+      altUnit: parsed.altUnit !== undefined ? parsed.altUnit : existing.altUnit,
+      altUnitFactor: parsed.altUnitFactor !== undefined ? parsed.altUnitFactor : existing.altUnitFactor,
+    });
+    const data = cleanAltUnit(parsed);
 
     if (data.sku && data.sku !== existing.sku) {
       const dup = await prisma.product.findUnique({ where: { sku: data.sku } });
