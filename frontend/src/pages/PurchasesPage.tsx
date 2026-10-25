@@ -157,7 +157,7 @@ export default function PurchasesPage() {
                     </option>
                   ))}
                 </Select>
-                <Input type="number" min={1} className="w-20" value={l.quantity} onChange={(e) => updateLine(idx, { quantity: Number(e.target.value) })} />
+                <Input type="number" min={0} step="any" className="w-20" value={l.quantity} onChange={(e) => updateLine(idx, { quantity: Number(e.target.value) })} />
                 <Input type="number" min={0} className="w-28" value={l.unitPrice} onChange={(e) => updateLine(idx, { unitPrice: Number(e.target.value) })} />
                 <Button variant="ghost" size="icon" onClick={() => removeLine(idx)}>
                   <Trash2 className="h-4 w-4 text-destructive" />
