@@ -13,6 +13,17 @@ export function formatCurrency(amount: number, currency = "XOF"): string {
   }
 }
 
+// Quantité lisible : arrondie à 3 décimales, sans zéros inutiles (2,5 ; 20 ; 0,333)
+export function formatQty(n: number | null | undefined): string {
+  const v = Math.round((Number(n) || 0) * 1000) / 1000;
+  return v.toLocaleString("fr-FR", { maximumFractionDigits: 3 });
+}
+
+// Unité d'une ligne de vente : celle choisie à la vente, sinon l'unité de base du produit.
+export function itemUnit(it: { unit?: string | null; product?: { unit?: string } | null }): string {
+  return it.unit || it.product?.unit || "";
+}
+
 export function formatDate(date: string | Date): string {
   const d = typeof date === "string" ? new Date(date) : date;
   return new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "short", year: "numeric" }).format(d);
