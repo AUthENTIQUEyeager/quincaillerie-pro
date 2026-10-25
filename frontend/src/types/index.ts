@@ -84,6 +84,10 @@ export interface Product {
   supplier?: Supplier | null;
   description?: string | null;
   unit: string;
+  altUnit?: string | null;
+  altUnitFactor?: number | null;
+  altSellingPrice?: number | null;
+  allowDecimal?: boolean;
   purchasePrice: number;
   sellingPrice: number;
   wholesalePrice?: number | null;
@@ -105,6 +109,8 @@ export interface SaleItem {
   productId: string;
   product?: Product;
   quantity: number;
+  unit?: string | null; // unité de vente (null = unité de base du produit)
+  unitFactor?: number;
   unitPrice: number;
   discount: number;
   total: number;
