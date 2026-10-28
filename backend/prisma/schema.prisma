@@ -23,6 +23,9 @@ model Company {
   email       String?
   address     String?
   receiptFooter String? // texte libre en pied des devis et reçus
+  activities    String? // texte libre : activités affichées sous le nom de l'entreprise sur les bordereaux
+  slogan        String? // devise de l'entreprise, affichée sous le logo des bordereaux
+  deliveryCounter Int   @default(0) // dernier n° de bordereau attribué (séquentiel par entreprise)
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -43,6 +46,7 @@ model Company {
   auditLogs    AuditLog[]
   employees    Employee[]
   priceChanges PriceChange[]
+  deliveries   Delivery[]
 }
 
 model Store {
@@ -390,11 +394,18 @@ model Sale {
   totalAmount   Float    @default(0)
   paidAmount    Float    @default(0)
   paymentMethod String   @default("ESPECES") // ESPECES, MOBILE_MONEY, CARTE, VIREMENT, MIXTE
+  // Remise des produits par le magasinier. Les ventes antérieures à cette fonction restent « SERVIE ».
+  deliveryNumber   Int?     // n° du bordereau de livraison (séquentiel par entreprise, null pour les anciennes ventes)
+  pickupCodeHash   String?  @unique // SHA-256 du code secret du reçu magasinier (le code lui-même n'est jamais stocké)
+  deliveryStatus   String   @default("SERVIE") // NON_APPLICABLE, EN_ATTENTE, PARTIELLE, SERVIE
   createdAt     DateTime @default(now())
 
   items        SaleItem[]
   payments     CustomerPayment[]
   salePayments SalePayment[]
+  deliveries   Delivery[]
+
+  @@unique([companyId, deliveryNumber])
 }
 
 model SaleItem {
@@ -409,6 +420,7 @@ model SaleItem {
   unitPrice Float
   discount  Float   @default(0)
   total     Float
+  deliveredQty Float @default(0) // quantité déjà remise au client (dans `unit`)
 }
 
 model CustomerPayment {
@@ -541,4 +553,35 @@ model SalePayment {
 
   @@index([saleId])
   @@index([companyId, createdAt])
+}
+
+// ---------------- REMISES MAGASIN (bordereau + reçu magasinier) ----------------
+// Une vente (VENTE) génère 2 documents : le bordereau de livraison (copie client)
+// et le reçu magasinier (QR code + code secret). Le magasinier valide ce qu'il remet ;
+// une remise = une ligne Delivery, avec une DeliveryLine par produit remis.
+// Le code secret n'est jamais stocké en clair (seulement son empreinte SHA-256, Sale.pickupCodeHash).
+model Delivery {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  saleId    String
+  sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  userId    String?
+  userName  String?
+  note      String?
+  createdAt DateTime @default(now())
+
+  lines DeliveryLine[]
+
+  @@index([saleId])
+  @@index([companyId, createdAt])
+}
+
+model DeliveryLine {
+  id         String   @id @default(cuid())
+  deliveryId String
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  saleItemId String
+  productId  String
+  quantity   Float    // dans l'unité de vente de la ligne (comme SaleItem.quantity)
 }

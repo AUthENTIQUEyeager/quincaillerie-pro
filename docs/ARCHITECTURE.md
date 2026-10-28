@@ -18,6 +18,21 @@
 - `StockMovement` : journal complet de tous les mouvements (entrée, sortie, vente, achat, transfert, inventaire, dommage) pour traçabilité totale
 - `AuditLog` et `Notification` : infrastructure prête pour la journalisation complète et les alertes temps réel
 
+## Bordereau de livraison et reçu magasinier
+
+À la validation d'une vente (`POST /api/sales`), la caisse obtient deux documents :
+
+1. **Bordereau de livraison** : copie du client, avec les prix. Son numéro (`Sale.deliveryNumber`) est séquentiel par entreprise (compteur `Company.deliveryCounter`, incrémenté en base dans la transaction de la vente : deux ventes simultanées ne peuvent pas avoir le même numéro). La numérotation démarre à 1.
+2. **Reçu magasinier** : sans aucun prix, avec un QR code (`QP1:` + code) et le code en clair, à présenter au magasinier.
+
+**Code secret.** 16 caractères d'un alphabet de 32 symboles (80 bits d'aléa, `crypto.randomInt`), sans date d'expiration. Il n'est **jamais stocké** : la base ne contient que son empreinte SHA-256 (`Sale.pickupCodeHash`, unique), et l'API ne la renvoie jamais. Le code n'est renvoyé qu'une fois, dans la réponse de création de la vente, pour l'impression. Un reçu perdu se remplace avec `POST /api/sales/:id/pickup-code` : un nouveau code est généré et l'ancien cesse immédiatement de fonctionner.
+
+**Remises (`/api/deliveries`).** Réservées au propriétaire, au gérant et au magasinier. `POST /lookup` et `POST /deliver` exigent le code (limite de 30 essais par minute et par IP) et ne renvoient jamais de prix. Une remise peut être partielle : `SaleItem.deliveredQty` cumule ce qui est parti, `Sale.deliveryStatus` passe de `EN_ATTENTE` à `PARTIELLE` puis `SERVIE`, et chaque remise est tracée (`Delivery` / `DeliveryLine` : qui, quand, quoi). Les mises à jour sont conditionnelles en base : deux magasiniers ne peuvent pas remettre deux fois la même quantité.
+
+**Stock réservé.** À la vente, la quantité passe de `Stock.quantity` (disponible) à `Stock.reserved` : elle ne peut plus être vendue mais est encore physiquement au magasin. À chaque remise validée, la réservation est levée et un mouvement `LIVRAISON` enregistre la sortie physique. Une vente peut être annulée tant que rien n'a été remis (la réservation revient au disponible). Un inventaire compte disponible + réservé. Les ventes antérieures à cette fonction (`deliveryNumber` nul, statut `SERVIE`) gardent l'ancien comportement.
+
+**QR code.** Généré côté navigateur par `frontend/src/lib/qr.ts` (SVG vectoriel, sans dépendance). La lecture se fait avec une douchette USB (le code est saisi suivi d'« Entrée »), la caméra (API `BarcodeDetector`, Chrome/Edge/Android) ou à la main.
+
 ## Pourquoi SQLite + Prisma ?
 
 - **SQLite** : zéro administration, un seul fichier à sauvegarder, largement suffisant en performance pour une quincaillerie (même avec plusieurs caisses simultanées grâce au mode WAL de SQLite).

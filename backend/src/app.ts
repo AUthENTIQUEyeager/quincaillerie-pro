@@ -25,6 +25,7 @@ import orderRoutes from "./routes/order.routes";
 import settingsRoutes from "./routes/settings.routes";
 import superadminRoutes from "./routes/superadmin.routes";
 import pricesRoutes from "./routes/prices.routes";
+import deliveryRoutes from "./routes/delivery.routes";
 
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 
@@ -80,6 +81,7 @@ export function createApp() {
   app.use("/api/settings", settingsRoutes);
   app.use("/api/superadmin", superadminRoutes);
   app.use("/api/prices", pricesRoutes);
+  app.use("/api/deliveries", deliveryRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

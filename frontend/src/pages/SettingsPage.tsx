@@ -54,7 +54,7 @@ export default function SettingsPage() {
     img.src = url;
   }
 
-  const [form, setForm] = useState({ name: "", logo: "", currency: "XOF", phone: "", email: "", address: "", receiptFooter: "" });
+  const [form, setForm] = useState({ name: "", logo: "", currency: "XOF", phone: "", email: "", address: "", receiptFooter: "", activities: "", slogan: "" });
 
   useEffect(() => {
     if (company) {
@@ -66,6 +66,8 @@ export default function SettingsPage() {
         email: company.email || "",
         address: company.address || "",
         receiptFooter: company.receiptFooter || "",
+        activities: company.activities || "",
+        slogan: company.slogan || "",
       });
     }
   }, [company]);
@@ -153,8 +155,22 @@ export default function SettingsPage() {
             <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
           </div>
           <div>
-            <Label>Adresse</Label>
-            <Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
+            <Label>Siège / adresse</Label>
+            <Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="Ex. : Secteur 16 Bobo-Dioulasso, en face de ..." />
+          </div>
+          <div>
+            <Label>Activités (en-tête du bordereau de livraison)</Label>
+            <Textarea
+              rows={4}
+              maxLength={600}
+              value={form.activities}
+              onChange={(e) => setForm({ ...form, activities: e.target.value })}
+              placeholder="Ex. : Section MATERIAUX DE CONSTRUCTION&#10;Fer à béton, Ciment, Tôles, Mobilier, Fourniture bureautique..."
+            />
+          </div>
+          <div>
+            <Label>Slogan (sous le logo)</Label>
+            <Input maxLength={200} value={form.slogan} onChange={(e) => setForm({ ...form, slogan: e.target.value })} placeholder="Ex. : L'étincelle du bien-être et de la qualité !" />
           </div>
           <div>
             <Label>Texte en bas des devis et reçus</Label>

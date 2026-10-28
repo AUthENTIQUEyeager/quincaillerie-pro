@@ -24,6 +24,9 @@ const updateSchema = z.object({
   email: z.string().email().optional().or(z.literal("")),
   address: z.string().optional(),
   receiptFooter: z.string().max(500).optional().nullable(),
+  // En-tête des bordereaux de livraison
+  activities: z.string().max(600).optional().nullable(),
+  slogan: z.string().max(200).optional().nullable(),
 });
 
 router.put(
