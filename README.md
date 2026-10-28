@@ -15,8 +15,6 @@ Logiciel de gestion commerciale complet pour quincailleries — catalogue, stock
 ## Structure du projet
 
 
-(src/routes/prices.routes.ts(119,58): error TS2322: Type 'Partial<Record<"purchasePrice" | "sellingPrice" | "wholesalePrice" | "resellerPrice" | "promoPrice", number | null>>' is not assignable to type '(Without<ProductUpdateInput, ProductUncheckedUpdateInput> & ProductUncheckedUpdateInput) | (Without<...> & ProductUpdateInput)'.)
-
 ```
 quincaillerie-pro/
 ├── backend/          API REST (Express + Prisma + SQLite)
@@ -86,6 +84,7 @@ Ouvrez http://localhost:5173, connectez-vous avec un des comptes ci-dessus, ou c
 - **Transferts** entre dépôts
 - **Inventaires** : comptage physique et ajustement automatique des écarts
 - **Ventes** : vente rapide (POS), devis, reçu imprimable, annulation avec restitution de stock, paiement espèces/mobile money/carte/virement/mixte
+- **Bordereau de livraison + reçu magasinier** : chaque vente imprime 2 documents. Le *bordereau* (modèle de l'entreprise : en-tête, n° automatique, date, client, tableau, total) reste au client. Le *reçu magasinier* (sans prix, QR code + code secret unique, sans date limite) est présenté au magasinier, qui le valide dans « Remises magasin » : remise totale ou partielle, le reçu est refusé une fois tout remis. Le stock est *réservé* à la vente puis sorti à chaque remise (voir [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md))
 - **Achats** : réception de marchandises avec mise à jour automatique du stock et des dettes fournisseurs
 - **Commandes** clients et fournisseurs avec suivi de statut
 - **Dépenses** : salaires, transport, électricité, internet, loyer, impôts, divers

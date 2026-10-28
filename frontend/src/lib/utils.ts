@@ -43,6 +43,18 @@ export function initials(name: string): string {
     .toUpperCase();
 }
 
+// N° de bordereau affiché sur 4 chiffres (0001, 0002 ... 2351). Au-delà de 9999, tous les chiffres sont gardés.
+export function formatDeliveryNumber(n: number | null | undefined): string {
+  return n == null ? "" : String(n).padStart(4, "0");
+}
+
+export const DELIVERY_STATUS_LABELS: Record<string, string> = {
+  NON_APPLICABLE: "—",
+  EN_ATTENTE: "À remettre",
+  PARTIELLE: "Remise partielle",
+  SERVIE: "Servi",
+};
+
 export const PAYMENT_LABELS: Record<string, string> = {
   ESPECES: "Espèces",
   MOBILE_MONEY: "Mobile Money",

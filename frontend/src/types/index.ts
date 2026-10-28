@@ -9,6 +9,8 @@ export interface Company {
   email?: string | null;
   address?: string | null;
   receiptFooter?: string | null;
+  activities?: string | null; // activités affichées sur le bordereau de livraison
+  slogan?: string | null; // devise affichée sous le logo du bordereau
   isActive?: boolean;
 }
 
@@ -114,6 +116,7 @@ export interface SaleItem {
   unitPrice: number;
   discount: number;
   total: number;
+  deliveredQty?: number; // quantité déjà remise au client par le magasinier
 }
 
 export interface SalePayment {
@@ -137,9 +140,40 @@ export interface Sale {
   totalAmount: number;
   paidAmount: number;
   paymentMethod: string;
+  deliveryNumber?: number | null; // n° du bordereau de livraison (null = ancienne vente)
+  deliveryStatus?: DeliveryStatus;
+  // Code secret du reçu magasinier : renvoyé UNE SEULE FOIS, à la création de la vente.
+  pickupCode?: string;
   items: SaleItem[];
   salePayments?: SalePayment[];
   createdAt: string;
+}
+
+export type DeliveryStatus = "NON_APPLICABLE" | "EN_ATTENTE" | "PARTIELLE" | "SERVIE";
+
+// Vue « magasinier » d'une vente (sans aucun prix), renvoyée par /deliveries/lookup et /deliveries/deliver
+export interface DeliverySlip {
+  id: string;
+  number: string;
+  deliveryNumber: number | null;
+  createdAt: string;
+  status: string;
+  deliveryStatus: DeliveryStatus;
+  store: { id: string; name: string };
+  customerName: string | null;
+  items: { id: string; productId: string; productName: string; sku: string | null; unit: string; allowDecimal: boolean; quantity: number; deliveredQty: number; remaining: number }[];
+  deliveries: { id: string; createdAt: string; userName: string | null; note: string | null; lines: { saleItemId: string; productName: string; quantity: number }[] }[];
+}
+
+export interface PendingDelivery {
+  id: string;
+  number: string;
+  deliveryNumber: number | null;
+  createdAt: string;
+  deliveryStatus: DeliveryStatus;
+  storeName: string;
+  customerName: string | null;
+  remainingLines: { id: string; productName: string; unit: string; remaining: number }[];
 }
 
 export interface Purchase {

@@ -25,6 +25,7 @@ import NotificationsPage from "@/pages/NotificationsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import SuperAdminPage from "@/pages/SuperAdminPage";
 import PricesPage from "@/pages/PricesPage";
+import DeliveriesPage from "@/pages/DeliveriesPage";
 import NotFoundPage from "@/pages/NotFoundPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -49,6 +50,13 @@ function CompanyRoute({ children }: { children: React.ReactNode }) {
 function PricesRoute({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user);
   if (user?.role !== "PROPRIETAIRE" && user?.role !== "GERANT") return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
+// Remises magasin : propriétaire, gérant et magasinier (le serveur applique aussi cette règle)
+function DeliveriesRoute({ children }: { children: React.ReactNode }) {
+  const user = useAuthStore((s) => s.user);
+  if (user?.role !== "PROPRIETAIRE" && user?.role !== "GERANT" && user?.role !== "MAGASINIER") return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -78,6 +86,7 @@ export default function App() {
         <Route path="/achats" element={<CompanyRoute><PurchasesPage /></CompanyRoute>} />
         <Route path="/commandes" element={<CompanyRoute><OrdersPage /></CompanyRoute>} />
         <Route path="/stock" element={<CompanyRoute><StockPage /></CompanyRoute>} />
+        <Route path="/remises" element={<CompanyRoute><DeliveriesRoute><DeliveriesPage /></DeliveriesRoute></CompanyRoute>} />
         <Route path="/depots" element={<CompanyRoute><StoresPage /></CompanyRoute>} />
         <Route path="/transferts" element={<CompanyRoute><TransfersPage /></CompanyRoute>} />
         <Route path="/inventaires" element={<CompanyRoute><InventoriesPage /></CompanyRoute>} />

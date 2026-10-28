@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { requireAuth, requireCompany } from "../middleware/auth";
+import { requireAuth, requireCompany, requireRole } from "../middleware/auth";
 import { asyncHandler, AppError } from "../middleware/errorHandler";
 import { pushNotification } from "../lib/notify";
+import { generatePickupCode, hashPickupCode } from "../lib/pickupCode";
 
 const router = Router();
 router.use(requireAuth, requireCompany);
@@ -26,6 +27,12 @@ const saleItemSchema = z.object({
   unitPrice: z.number().min(0),
   discount: z.number().min(0).default(0),
 });
+
+// L'empreinte du code magasinier ne sort jamais de l'API (même hachée, pas besoin de l'exposer).
+function stripSecrets<T extends { pickupCodeHash?: unknown }>(sale: T): Omit<T, "pickupCodeHash"> {
+  const { pickupCodeHash: _omit, ...rest } = sale;
+  return rest;
+}
 
 // Arrondi pour éviter les dérives du type 0,1 + 0,2 = 0,30000000000000004
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -68,7 +75,7 @@ router.get(
       orderBy: { createdAt: "desc" },
       take: 300,
     });
-    res.json(sales);
+    res.json(sales.map(stripSecrets));
   })
 );
 
@@ -80,7 +87,7 @@ router.get(
       include: { customer: true, user: { select: { name: true } }, store: true, items: { include: { product: true } }, payments: true, salePayments: true },
     });
     if (!sale) throw new AppError("Vente introuvable.", 404);
-    res.json(sale);
+    res.json(stripSecrets(sale));
   })
 );
 
@@ -130,6 +137,10 @@ router.post(
     const distinctMethods = [...new Set(paymentLines.map((p) => p.method))];
     const paymentMethod = distinctMethods.length > 1 ? "MIXTE" : distinctMethods[0] ?? data.paymentMethod;
 
+    // Reçu magasinier : code secret généré ici, renvoyé UNE SEULE FOIS au caissier pour impression.
+    // Seule son empreinte est enregistrée (voir lib/pickupCode.ts).
+    const pickupCode = isSale ? generatePickupCode() : null;
+
     const sale = await prisma.$transaction(async (tx) => {
       // Vérifie et décrémente le stock uniquement pour les ventes réelles (pas devis)
       if (data.type === "VENTE") {
@@ -149,6 +160,18 @@ router.post(
       }
 
       const number = await generateSaleNumber(companyId);
+
+      // N° du bordereau de livraison : séquentiel par entreprise (le premier est le n° 1).
+      // L'incrément se fait en base : deux ventes simultanées ne peuvent pas recevoir le même numéro.
+      let deliveryNumber: number | null = null;
+      if (isSale) {
+        const counter = await tx.company.update({
+          where: { id: companyId },
+          data: { deliveryCounter: { increment: 1 } },
+          select: { deliveryCounter: true },
+        });
+        deliveryNumber = counter.deliveryCounter;
+      }
       const created = await tx.sale.create({
         data: {
           companyId,
@@ -162,6 +185,9 @@ router.post(
           totalAmount,
           paidAmount,
           paymentMethod,
+          deliveryNumber,
+          pickupCodeHash: pickupCode ? hashPickupCode(pickupCode) : null,
+          deliveryStatus: isSale ? "EN_ATTENTE" : "NON_APPLICABLE",
           items: {
             create: items.map((it) => ({
               productId: it.productId,
@@ -181,10 +207,12 @@ router.post(
         for (const item of items) {
           await tx.stock.update({
             where: { productId_storeId: { productId: item.productId, storeId: data.storeId } },
-            data: { quantity: { decrement: item.baseQty } },
+            // Le stock disponible baisse tout de suite (plus vendable) mais le produit est seulement
+            // « réservé » : il ne quitte le magasin qu'à la remise validée par le magasinier.
+            data: { quantity: { decrement: item.baseQty }, reserved: { increment: item.baseQty } },
           });
           await tx.stockMovement.create({
-            data: { productId: item.productId, storeId: data.storeId, type: "VENTE", quantity: -item.baseQty, reference: created.number, userId: req.auth!.userId },
+            data: { productId: item.productId, storeId: data.storeId, type: "VENTE", quantity: -item.baseQty, reason: "Réservé pour le client jusqu'à la remise au magasin", reference: created.number, userId: req.auth!.userId },
           });
         }
 
@@ -207,7 +235,13 @@ router.post(
 
       return tx.sale.findUniqueOrThrow({
         where: { id: created.id },
-        include: { items: { include: { product: true } }, salePayments: true },
+        include: {
+          items: { include: { product: true } },
+          salePayments: true,
+          customer: true,
+          store: true,
+          user: { select: { name: true } },
+        },
       });
     });
 
@@ -215,7 +249,9 @@ router.post(
       await pushNotification(companyId, "NOUVELLE_VENTE", "Nouvelle vente", `Vente ${sale.number} enregistrée pour un total de ${totalAmount}.`);
     }
 
-    res.status(201).json(sale);
+    // Le code secret n'est renvoyé qu'à cet instant (il sert à imprimer le reçu magasinier).
+    const publicSale = stripSecrets(sale);
+    res.status(201).json(pickupCode ? { ...publicSale, pickupCode } : publicSale);
   })
 );
 
@@ -225,19 +261,40 @@ router.post(
   asyncHandler(async (req, res) => {
     const sale = await prisma.sale.findFirst({ where: { id: req.params.id, ...scope(req) }, include: { items: true } });
     if (!sale) throw new AppError("Vente introuvable.", 404);
+    // Un devis n'a jamais touché au stock : l'« annuler » ferait remonter le stock à tort.
+    if (sale.type !== "VENTE") throw new AppError("Seules les ventes peuvent être annulées.", 400);
     if (sale.status !== "VALIDEE") throw new AppError("Cette vente ne peut plus être annulée.", 400);
 
+    // Ventes faites avec le bordereau : le stock est « réservé » tant que rien n'a été remis.
+    // Les ventes plus anciennes (sans n° de bordereau) n'ont pas de réservation.
+    const usesReservation = sale.deliveryNumber !== null;
+    if (usesReservation && sale.deliveryStatus !== "EN_ATTENTE") {
+      throw new AppError("Des produits ont déjà été remis au client : cette vente ne peut plus être annulée.", 400);
+    }
+
     await prisma.$transaction(async (tx) => {
+      // Annulation atomique : protège d'une double annulation et d'une remise au même instant.
+      const lockWhere: any = { id: sale.id, status: "VALIDEE" };
+      const lockData: any = { status: "ANNULEE" };
+      if (usesReservation) {
+        lockWhere.deliveryStatus = "EN_ATTENTE";
+        lockData.deliveryStatus = "NON_APPLICABLE"; // le reçu magasinier n'est plus utilisable
+      }
+      const lock = await tx.sale.updateMany({ where: lockWhere, data: lockData });
+      if (lock.count !== 1) throw new AppError("Cette vente ne peut plus être annulée.", 400);
+
       for (const item of sale.items) {
+        const baseQty = round3(item.quantity * item.unitFactor);
+        const stockData: any = { quantity: { increment: baseQty } };
+        if (usesReservation) stockData.reserved = { decrement: baseQty };
         await tx.stock.update({
           where: { productId_storeId: { productId: item.productId, storeId: sale.storeId } },
-          data: { quantity: { increment: round3(item.quantity * item.unitFactor) } },
+          data: stockData,
         });
         await tx.stockMovement.create({
-          data: { productId: item.productId, storeId: sale.storeId, type: "RETOUR", quantity: round3(item.quantity * item.unitFactor), reference: sale.number, userId: req.auth!.userId },
+          data: { productId: item.productId, storeId: sale.storeId, type: "RETOUR", quantity: baseQty, reference: sale.number, userId: req.auth!.userId },
         });
       }
-      await tx.sale.update({ where: { id: sale.id }, data: { status: "ANNULEE" } });
       if (sale.customerId) {
         await tx.customer.update({ where: { id: sale.customerId }, data: { balance: { decrement: Math.max(sale.totalAmount - sale.paidAmount, 0) } } });
       }
@@ -245,6 +302,35 @@ router.post(
 
     await pushNotification(sale.companyId, "RETOUR", "Vente annulée", `La vente ${sale.number} a été annulée et le stock restitué.`);
     res.json({ ok: true });
+  })
+);
+
+// Nouveau reçu magasinier. Le code secret n'étant jamais stocké, on ne peut pas le réafficher :
+// on en génère un nouveau, et l'ancien reçu devient immédiatement inutilisable.
+router.post(
+  "/:id/pickup-code",
+  requireRole("PROPRIETAIRE", "GERANT", "CAISSIER"),
+  asyncHandler(async (req, res) => {
+    const sale = await prisma.sale.findFirst({ where: { id: req.params.id, ...scope(req) } });
+    if (!sale) throw new AppError("Vente introuvable.", 404);
+    if (sale.type !== "VENTE" || sale.status !== "VALIDEE") {
+      throw new AppError("Cette vente n'a pas de reçu magasinier utilisable.", 400);
+    }
+    if (sale.deliveryNumber === null) {
+      throw new AppError("Cette vente date d'avant le reçu magasinier.", 400);
+    }
+    if (sale.deliveryStatus === "SERVIE") {
+      throw new AppError("Tous les produits de cette vente ont déjà été remis.", 400);
+    }
+
+    const pickupCode = generatePickupCode();
+    const updated = await prisma.sale.updateMany({
+      where: { id: sale.id, status: "VALIDEE", deliveryStatus: { in: ["EN_ATTENTE", "PARTIELLE"] } },
+      data: { pickupCodeHash: hashPickupCode(pickupCode) },
+    });
+    if (updated.count !== 1) throw new AppError("Cette vente ne peut plus recevoir de nouveau reçu.", 409);
+
+    res.json({ pickupCode, deliveryNumber: sale.deliveryNumber });
   })
 );
 

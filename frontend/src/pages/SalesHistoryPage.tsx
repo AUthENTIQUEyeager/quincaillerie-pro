@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ClipboardList, Ban, Eye, X, Printer } from "lucide-react";
+import { ClipboardList, Ban, Eye, X, Printer, QrCode } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -12,9 +12,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { EmptyState } from "@/components/common/EmptyState";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatCurrency, formatDateTime, formatQty, itemUnit, paymentLabel } from "@/lib/utils";
+import { DELIVERY_STATUS_LABELS, formatCurrency, formatDateTime, formatDeliveryNumber, formatQty, itemUnit, paymentLabel } from "@/lib/utils";
 import toast from "react-hot-toast";
-import { printSaleDocument } from "@/lib/printDocument";
+import { printPickupSlip, printSaleDocument } from "@/lib/printDocument";
 import type { Sale, Company } from "@/types";
 
 const statusVariant: Record<string, "success" | "destructive" | "warning"> = {
@@ -22,6 +22,18 @@ const statusVariant: Record<string, "success" | "destructive" | "warning"> = {
   ANNULEE: "destructive",
   RETOURNEE: "warning",
 };
+
+const deliveryVariant: Record<string, "success" | "warning" | "secondary"> = {
+  EN_ATTENTE: "warning",
+  PARTIELLE: "warning",
+  SERVIE: "success",
+  NON_APPLICABLE: "secondary",
+};
+
+// Annulation possible tant que rien n'a été remis (les ventes d'avant le bordereau n'ont pas ce suivi).
+const canCancel = (s: Sale) => s.status === "VALIDEE" && s.type === "VENTE" && (s.deliveryNumber == null || s.deliveryStatus === "EN_ATTENTE");
+// Nouveau reçu magasinier possible tant que tout n'a pas été remis.
+const canReissue = (s: Sale) => s.status === "VALIDEE" && s.type === "VENTE" && s.deliveryNumber != null && (s.deliveryStatus === "EN_ATTENTE" || s.deliveryStatus === "PARTIELLE");
 
 // Transforme une date "YYYY-MM-DD" en bornes de journée (00:00:00 -> 23:59:59.999) en heure locale.
 function dayBounds(dateStr: string): { from: string; to: string } {
@@ -61,6 +73,7 @@ export default function SalesHistoryPage() {
   }
 
   const [cancelTarget, setCancelTarget] = useState<Sale | null>(null);
+  const [reissueTarget, setReissueTarget] = useState<Sale | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
 
   const { data: detail, isLoading: detailLoading } = useQuery({
@@ -76,6 +89,21 @@ export default function SalesHistoryPage() {
       queryClient.invalidateQueries({ queryKey: ["sales"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       setCancelTarget(null);
+    },
+  });
+
+  // Le code secret n'étant jamais conservé, un « nouveau reçu » = nouveau code ; l'ancien reçu devient inutilisable.
+  const reissue = useMutation({
+    mutationFn: async (id: string) => {
+      const { pickupCode } = (await api.post<{ pickupCode: string }>(`/sales/${id}/pickup-code`)).data;
+      const sale = (await api.get<Sale>(`/sales/${id}`)).data;
+      const co = company ?? (await api.get<Company>("/settings")).data;
+      return { sale, co, pickupCode };
+    },
+    onSuccess: ({ sale, co, pickupCode }) => {
+      setReissueTarget(null);
+      toast.success("Nouveau reçu magasinier généré. L'ancien ne fonctionne plus.");
+      printPickupSlip(sale, co, pickupCode);
     },
   });
 
@@ -112,13 +140,17 @@ export default function SalesHistoryPage() {
               <TableHead>Total</TableHead>
               <TableHead>Paiement</TableHead>
               <TableHead>Statut</TableHead>
+              <TableHead>Remise</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {sales.map((s) => (
               <TableRow key={s.id}>
-                <TableCell className="font-mono text-xs">{s.number}</TableCell>
+                <TableCell className="font-mono text-xs">
+                  {s.number}
+                  {s.deliveryNumber != null && <span className="block text-muted-foreground">Bord. n° {formatDeliveryNumber(s.deliveryNumber)}</span>}
+                </TableCell>
                 <TableCell className="text-muted-foreground">{formatDateTime(s.createdAt)}</TableCell>
                 <TableCell>{s.customer?.name || "Comptant"}</TableCell>
                 <TableCell className="text-muted-foreground">{s.user?.name || "—"}</TableCell>
@@ -129,14 +161,26 @@ export default function SalesHistoryPage() {
                 <TableCell>
                   <Badge variant={statusVariant[s.status] || "secondary"}>{s.status}</Badge>
                 </TableCell>
+                <TableCell>
+                  {s.type === "VENTE" && s.status === "VALIDEE" && s.deliveryNumber != null ? (
+                    <Badge variant={deliveryVariant[s.deliveryStatus ?? "NON_APPLICABLE"] || "secondary"}>{DELIVERY_STATUS_LABELS[s.deliveryStatus ?? "NON_APPLICABLE"]}</Badge>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
                 <TableCell className="text-right">
                   <Button variant="ghost" size="icon" onClick={() => setDetailId(s.id)} aria-label="Voir les détails">
                     <Eye className="h-4 w-4" />
                   </Button>
-                  <Button variant="ghost" size="icon" onClick={() => printSale(s.id)} disabled={printingId === s.id} aria-label={s.type === "DEVIS" ? "Imprimer le devis" : "Imprimer le reçu"} title={s.type === "DEVIS" ? "Imprimer le devis proforma (A4)" : "Imprimer le reçu (ticket)"}>
+                  <Button variant="ghost" size="icon" onClick={() => printSale(s.id)} disabled={printingId === s.id} aria-label={s.type === "DEVIS" ? "Imprimer le devis" : "Imprimer le reçu"} title={s.type === "DEVIS" ? "Imprimer le devis proforma (A4)" : s.deliveryNumber != null ? "Réimprimer le bordereau client" : "Imprimer le reçu (ticket)"}>
                     <Printer className="h-4 w-4" />
                   </Button>
-                  {s.status === "VALIDEE" && s.type === "VENTE" && (
+                  {canReissue(s) && (
+                    <Button variant="ghost" size="icon" onClick={() => setReissueTarget(s)} aria-label="Nouveau reçu magasinier" title="Imprimer un nouveau reçu magasinier (l'ancien sera annulé)">
+                      <QrCode className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {canCancel(s) && (
                     <Button variant="ghost" size="icon" onClick={() => setCancelTarget(s)} aria-label="Annuler">
                       <Ban className="h-4 w-4 text-destructive" />
                     </Button>
@@ -156,6 +200,17 @@ export default function SalesHistoryPage() {
         onConfirm={() => cancelTarget && cancel.mutate(cancelTarget.id)}
         loading={cancel.isPending}
         confirmLabel="Annuler la vente"
+      />
+
+      <ConfirmDialog
+        open={!!reissueTarget}
+        onOpenChange={(v) => !v && setReissueTarget(null)}
+        title={`Nouveau reçu magasinier pour la vente ${reissueTarget?.number} ?`}
+        description="Un nouveau code est généré et imprimé. Le reçu magasinier précédent (perdu, volé ou abîmé) ne fonctionnera plus. Les produits déjà remis restent comptés."
+        onConfirm={() => reissueTarget && reissue.mutate(reissueTarget.id)}
+        loading={reissue.isPending}
+        confirmLabel="Générer et imprimer"
+        variant="default"
       />
 
       <Dialog open={!!detailId} onOpenChange={(v) => !v && setDetailId(null)}>
@@ -181,6 +236,12 @@ export default function SalesHistoryPage() {
                   <p className="text-xs text-muted-foreground">Statut</p>
                   <Badge variant={statusVariant[detail.status] || "secondary"}>{detail.status}</Badge>
                 </div>
+                {detail.type === "VENTE" && detail.deliveryNumber != null && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Bordereau n° {formatDeliveryNumber(detail.deliveryNumber)}</p>
+                    <Badge variant={deliveryVariant[detail.deliveryStatus ?? "NON_APPLICABLE"] || "secondary"}>{DELIVERY_STATUS_LABELS[detail.deliveryStatus ?? "NON_APPLICABLE"]}</Badge>
+                  </div>
+                )}
                 <div>
                   <p className="text-xs text-muted-foreground">Client</p>
                   <p className="font-medium">{detail.customer?.name || "Client comptant"}</p>
@@ -208,6 +269,7 @@ export default function SalesHistoryPage() {
                         <p className="truncate font-medium">{it.product?.name || it.productId}</p>
                         <p className="text-xs text-muted-foreground">
                           {formatQty(it.quantity)} {itemUnit(it)} x {formatCurrency(it.unitPrice, currency)}
+                          {detail.deliveryNumber != null && detail.status === "VALIDEE" && ` — remis : ${formatQty(it.deliveredQty ?? 0)} / ${formatQty(it.quantity)}`}
                         </p>
                       </div>
                       <p className="shrink-0 font-medium tabular-nums">{formatCurrency(it.total, currency)}</p>

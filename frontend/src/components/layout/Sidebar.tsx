@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Wrench,
   Coins,
+  PackageCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/authStore";
@@ -60,6 +61,7 @@ const nav: { section: string; items: NavItem[] }[] = [
     section: "Stock",
     items: [
       { to: "/stock", label: "Stock", icon: Warehouse },
+      { to: "/remises", label: "Remises magasin", icon: PackageCheck, roles: ["PROPRIETAIRE", "GERANT", "MAGASINIER"] },
       { to: "/depots", label: "Dépôts", icon: Building2 },
       { to: "/transferts", label: "Transferts", icon: ArrowLeftRight },
       { to: "/inventaires", label: "Inventaires", icon: ClipboardCheck },

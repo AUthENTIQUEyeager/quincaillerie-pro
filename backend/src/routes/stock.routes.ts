@@ -127,7 +127,8 @@ router.post(
     if (!inv) throw new AppError("Inventaire introuvable.", 404);
     const data = inventoryLineSchema.parse(req.body);
     const stock = await prisma.stock.findUnique({ where: { productId_storeId: { productId: data.productId, storeId: inv.storeId } } });
-    const expectedQty = stock?.quantity ?? 0;
+    // Le comptage physique inclut les produits réservés (vendus mais pas encore remis au client).
+    const expectedQty = (stock?.quantity ?? 0) + (stock?.reserved ?? 0);
     const line = await prisma.inventoryLine.create({
       data: { inventoryId: inv.id, productId: data.productId, expectedQty, countedQty: data.countedQty, difference: data.countedQty - expectedQty },
     });
@@ -145,10 +146,15 @@ router.post(
     await prisma.$transaction(async (tx) => {
       for (const line of inv.lines) {
         if (line.difference !== 0) {
+          // Le comptage inclut les produits réservés : le disponible = comptage - réservé.
+          const current = await tx.stock.findUnique({
+            where: { productId_storeId: { productId: line.productId, storeId: inv.storeId } },
+          });
+          const available = Math.max(line.countedQty - (current?.reserved ?? 0), 0);
           await tx.stock.upsert({
             where: { productId_storeId: { productId: line.productId, storeId: inv.storeId } },
-            update: { quantity: line.countedQty },
-            create: { productId: line.productId, storeId: inv.storeId, quantity: line.countedQty },
+            update: { quantity: available },
+            create: { productId: line.productId, storeId: inv.storeId, quantity: available },
           });
           await tx.stockMovement.create({
             data: {

@@ -1,4 +1,5 @@
-import { formatCurrency, formatDate, formatDateTime, formatQty, itemUnit, paymentLabel } from "@/lib/utils";
+import { formatCurrency, formatDate, formatDateTime, formatDeliveryNumber, formatQty, itemUnit, paymentLabel } from "@/lib/utils";
+import { qrSvg } from "@/lib/qr";
 import type { Company, Sale } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -231,7 +232,229 @@ export function buildReceiptHtml(sale: Sale, company: Company): string {
 </body></html>`;
 }
 
-// Devis (et bon de livraison) : A4 proforma. Vente : ticket 80 mm.
+// ------------------- Bordereau de livraison (copie client) et reçu magasinier -------------------
+//
+// À chaque vente, la caisse produit 2 documents :
+//  1. le BORDEREAU DE LIVRAISON : la copie du client, avec les prix (modèle papier de l'entreprise) ;
+//  2. le REÇU MAGASINIER : que le client présente au magasinier pour retirer ses produits.
+//     Sans aucun prix, avec un QR code et un code secret unique, valable sans limite de date
+//     jusqu'à ce que tout soit remis. Le magasinier le valide dans le logiciel (page « Remises »).
+
+type Parts = { css: string; body: string };
+
+function htmlDocument(title: string, parts: Parts[]): string {
+  const pages = parts.map((p) => `<section class="page">${p.body}</section>`).join("");
+  return `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title>${esc(title)}</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #111; margin: 0; }
+  .page { page-break-after: always; }
+  .page:last-child { page-break-after: auto; }
+  ${parts.map((p) => p.css).join("\n")}
+</style></head><body>${pages}</body></html>`;
+}
+
+const BL_MIN_ROWS = 10; // lignes vides ajoutées pour garder l'aspect du carnet papier
+
+function deliveryNoteParts(sale: Sale, company: Company): Parts {
+  const cur = company.currency || "XOF";
+  const money = (n: number) => esc(formatCurrency(n, cur));
+  const d = new Date(sale.createdAt);
+  const two = (n: number) => String(n).padStart(2, "0");
+
+  const rows = sale.items.map(
+    (it) => `
+      <tr>
+        <td>${esc(it.product?.name ?? it.productId)}</td>
+        <td class="r">${esc(formatQty(it.quantity))}${itemUnit(it) ? ` <span class="muted">${esc(itemUnit(it))}</span>` : ""}</td>
+        <td class="r">${money(it.unitPrice)}</td>
+        <td class="r b">${money(it.total)}</td>
+      </tr>`
+  );
+  while (rows.length < BL_MIN_ROWS) rows.push(`<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td></tr>`);
+
+  const remaining = sale.totalAmount - sale.paidAmount;
+  const contact: string[] = [];
+  if (company.address) contact.push(`<div><b>Siège :</b> ${esc(company.address)}</div>`);
+  if (company.phone) contact.push(`<div><b>Contacts :</b> ${esc(company.phone)}</div>`);
+  if (company.email) contact.push(`<div><b>E-mail :</b> ${esc(company.email)}</div>`);
+
+  const css = `
+  .bl-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  .bl-name { flex: 1; border: 2px solid #111; border-radius: 14px; padding: 8px 16px; font-size: 30px; font-weight: 800; line-height: 1.1; }
+  .bl-date { width: 62mm; border: 2px solid #111; border-radius: 6px; }
+  .bl-date table { width: 100%; border-collapse: collapse; }
+  .bl-date th { font-size: 10px; text-transform: uppercase; padding: 3px 0; border-bottom: 1px solid #111; border-right: 1px solid #111; }
+  .bl-date td { text-align: center; font-size: 17px; font-weight: 700; padding: 8px 0; border-right: 1px solid #111; }
+  .bl-date th:last-child, .bl-date td:last-child { border-right: 0; }
+  .bl-head { display: flex; gap: 14px; align-items: center; margin-top: 10px; }
+  .bl-logo { width: 38mm; flex: none; text-align: center; }
+  .bl-logo img { max-width: 100%; max-height: 28mm; object-fit: contain; }
+  .bl-slogan { font-size: 9px; font-style: italic; color: #333; margin-top: 2px; }
+  .bl-info { flex: 1; text-align: center; line-height: 1.4; }
+  .bl-info .act { font-size: 12px; margin-bottom: 4px; }
+  .bl-title { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 14px 0 8px; }
+  .bl-title h1 { font-size: 22px; margin: 0; letter-spacing: .5px; }
+  .bl-num { border: 2px solid #111; border-radius: 6px; padding: 2px 14px; font-size: 26px; font-weight: 800; letter-spacing: 1px; }
+  .bl-client { border: 2px solid #111; border-radius: 14px; padding: 8px 16px; font-size: 15px; font-weight: 700; margin-bottom: 10px; }
+  .bl-client span { font-weight: 400; }
+  .bl-table { width: 100%; border-collapse: collapse; border: 2px solid #111; }
+  .bl-table th { text-align: center; font-size: 12px; padding: 8px 6px; border: 1px solid #111; }
+  .bl-table th:first-child { text-align: left; }
+  .bl-table td { padding: 8px 8px; border: 1px solid #111; vertical-align: top; }
+  .bl-table tr { page-break-inside: avoid; }
+  .bl-table tr.empty td { height: 9mm; }
+  .bl-table .r { text-align: right; white-space: nowrap; }
+  .bl-table .b { font-weight: 700; }
+  .bl-table .muted { color: #555; }
+  .bl-total { display: flex; border: 2px solid #111; border-radius: 0 0 14px 14px; margin-top: -1px; }
+  .bl-total div { padding: 9px 14px; font-size: 16px; font-weight: 800; }
+  .bl-total .label { width: 30%; border-right: 2px solid #111; }
+  .bl-total .value { flex: 1; text-align: right; }
+  .bl-pay { margin-top: 6px; font-size: 11px; text-align: right; color: #333; }
+  .bl-footer { margin-top: 14px; text-align: center; font-size: 11px; color: #444; }`;
+
+  const body = `
+  <div class="bl-top">
+    <div class="bl-name">${esc(company.name)}</div>
+    <div class="bl-date">
+      <table>
+        <thead><tr><th>Jour</th><th>Mois</th><th>Année</th></tr></thead>
+        <tbody><tr><td>${two(d.getDate())}</td><td>${two(d.getMonth() + 1)}</td><td>${d.getFullYear()}</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="bl-head">
+    <div class="bl-logo">
+      ${company.logo ? `<img src="${esc(company.logo)}" alt="">` : ""}
+      ${company.slogan ? `<div class="bl-slogan">${esc(company.slogan)}</div>` : ""}
+    </div>
+    <div class="bl-info">
+      ${company.activities ? `<div class="act">${multiline(company.activities)}</div>` : ""}
+      ${contact.join("")}
+    </div>
+  </div>
+  <div class="bl-title">
+    <h1>BORDEREAU DE LIVRAISON N°</h1>
+    <div class="bl-num">${esc(formatDeliveryNumber(sale.deliveryNumber) || sale.number)}</div>
+  </div>
+  <div class="bl-client">Client : <span>${esc(sale.customer?.name || "Client comptant")}</span></div>
+  <table class="bl-table">
+    <thead><tr><th>DESIGNATIONS</th><th style="width:20%">QUANT</th><th style="width:20%">P. UNIT</th><th style="width:22%">P. TOTAL</th></tr></thead>
+    <tbody>${rows.join("")}</tbody>
+  </table>
+  <div class="bl-total"><div class="label">TOTAL</div><div class="value">${money(sale.totalAmount)}</div></div>
+  ${remaining > 0.0001 ? `<div class="bl-pay">Payé : ${money(sale.paidAmount)} — <b>Reste à payer : ${money(remaining)}</b></div>` : ""}
+  <div class="bl-footer">${company.receiptFooter ? multiline(company.receiptFooter) : "Merci de votre confiance"}</div>`;
+
+  return { css, body };
+}
+
+// Le code est affiché par blocs de 4 pour être lu et saisi sans erreur : 7K3M-9X2Q-WR4T-BD8F
+const groupCode = (code: string) => code.replace(/(.{4})(?=.)/g, "$1-");
+
+function pickupSlipParts(sale: Sale, company: Company, code: string): Parts {
+  const rows = sale.items
+    .map(
+      (it) => `
+      <tr>
+        <td>${esc(it.product?.name ?? it.productId)}</td>
+        <td class="r b">${esc(formatQty(it.quantity))} ${esc(itemUnit(it))}</td>
+      </tr>`
+    )
+    .join("");
+
+  const css = `
+  .rm-wrap { border: 2px dashed #111; border-radius: 10px; padding: 14px 16px; }
+  .rm-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .rm-co { font-size: 15px; font-weight: 800; }
+  .rm-title { font-size: 22px; font-weight: 800; letter-spacing: .5px; margin: 2px 0 0; }
+  .rm-sub { font-size: 11px; color: #333; }
+  .rm-num { border: 2px solid #111; border-radius: 6px; padding: 4px 12px; font-size: 22px; font-weight: 800; text-align: center; }
+  .rm-num small { display: block; font-size: 9px; font-weight: 400; text-transform: uppercase; letter-spacing: .5px; }
+  .rm-meta { display: flex; gap: 22px; margin: 10px 0; font-size: 12px; }
+  .rm-table { width: 100%; border-collapse: collapse; }
+  .rm-table th { background: #eee; text-align: left; font-size: 11px; text-transform: uppercase; padding: 6px 8px; border: 1px solid #111; }
+  .rm-table td { padding: 7px 8px; border: 1px solid #555; }
+  .rm-table .r { text-align: right; white-space: nowrap; width: 28%; }
+  .rm-table .b { font-weight: 700; }
+  .rm-table tr { page-break-inside: avoid; }
+  .rm-secure { display: flex; align-items: center; gap: 16px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #111; }
+  .rm-qr svg { display: block; width: 38mm; height: 38mm; }
+  .rm-code { font-family: "Courier New", monospace; font-size: 20px; font-weight: 800; letter-spacing: 2px; }
+  .rm-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: #444; }
+  .rm-warn { font-size: 10px; color: #333; margin-top: 6px; line-height: 1.4; }
+  .rm-sign { display: flex; gap: 30px; margin-top: 22px; }
+  .rm-sign div { flex: 1; border-top: 1px solid #111; padding-top: 4px; text-align: center; font-size: 10px; color: #555; }`;
+
+  const d = new Date(sale.createdAt);
+  const body = `
+  <div class="rm-wrap">
+    <div class="rm-top">
+      <div>
+        <div class="rm-co">${esc(company.name)}</div>
+        <div class="rm-title">REÇU MAGASINIER</div>
+        <div class="rm-sub">À présenter au magasinier pour retirer les produits ci-dessous</div>
+      </div>
+      <div class="rm-num"><small>Bordereau n°</small>${esc(formatDeliveryNumber(sale.deliveryNumber) || sale.number)}</div>
+    </div>
+    <div class="rm-meta">
+      <div><b>Date :</b> ${esc(formatDateTime(d))}</div>
+      <div><b>Client :</b> ${esc(sale.customer?.name || "Client comptant")}</div>
+      ${sale.store?.name ? `<div><b>Dépôt :</b> ${esc(sale.store.name)}</div>` : ""}
+    </div>
+    <table class="rm-table">
+      <thead><tr><th>Désignation</th><th class="r">Quantité</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="rm-secure">
+      <div class="rm-qr">${qrSvg("QP1:" + code, 300)}</div>
+      <div>
+        <div class="rm-label">Code du reçu</div>
+        <div class="rm-code">${esc(groupCode(code))}</div>
+        <div class="rm-warn">
+          Ce reçu est <b>unique et personnel</b>. Il n'a pas de date limite : il reste valable jusqu'à la remise complète des produits,
+          puis il est annulé. Ne le donnez pas à un tiers et ne le photographiez pas.
+        </div>
+      </div>
+    </div>
+    <div class="rm-sign"><div>Signature du magasinier</div><div>Signature du client</div></div>
+  </div>`;
+
+  return { css, body };
+}
+
+export function buildDeliveryNoteHtml(sale: Sale, company: Company): string {
+  return htmlDocument(`Bordereau de livraison ${formatDeliveryNumber(sale.deliveryNumber) || sale.number}`, [deliveryNoteParts(sale, company)]);
+}
+
+export function buildPickupSlipHtml(sale: Sale, company: Company, code: string): string {
+  return htmlDocument(`Reçu magasinier ${formatDeliveryNumber(sale.deliveryNumber) || sale.number}`, [pickupSlipParts(sale, company, code)]);
+}
+
+// Les 2 documents d'une vente, en une seule impression : page 1 = bordereau client, page 2 = reçu magasinier.
+export function buildSaleBundleHtml(sale: Sale, company: Company, code: string): string {
+  return htmlDocument(`Vente ${sale.number}`, [deliveryNoteParts(sale, company), pickupSlipParts(sale, company, code)]);
+}
+
+export function printDeliveryNote(sale: Sale, company: Company) {
+  printHtml(buildDeliveryNoteHtml(sale, company));
+}
+
+export function printPickupSlip(sale: Sale, company: Company, code: string) {
+  printHtml(buildPickupSlipHtml(sale, company, code));
+}
+
+export function printSaleBundle(sale: Sale, company: Company, code: string) {
+  printHtml(buildSaleBundleHtml(sale, company, code));
+}
+
+// Devis et bon de livraison : A4 proforma. Vente avec bordereau : bordereau client.
+// Anciennes ventes (avant le bordereau) : ticket 80 mm comme avant.
 export function printSaleDocument(sale: Sale, company: Company) {
-  printHtml(sale.type === "VENTE" ? buildReceiptHtml(sale, company) : buildProformaHtml(sale, company));
+  if (sale.type !== "VENTE") return printHtml(buildProformaHtml(sale, company));
+  if (sale.deliveryNumber != null) return printHtml(buildDeliveryNoteHtml(sale, company));
+  printHtml(buildReceiptHtml(sale, company));
 }

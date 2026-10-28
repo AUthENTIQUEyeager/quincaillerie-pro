@@ -10,9 +10,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/common/EmptyState";
-import { formatCurrency, formatQty, itemUnit, paymentLabel } from "@/lib/utils";
+import { formatCurrency, formatDeliveryNumber, formatQty, itemUnit, paymentLabel } from "@/lib/utils";
+import { printDeliveryNote, printPickupSlip, printSaleBundle, printSaleDocument } from "@/lib/printDocument";
 import toast from "react-hot-toast";
-import type { Product, Store, Customer, Sale } from "@/types";
+import type { Product, Store, Customer, Sale, Company } from "@/types";
 
 // Les 3 tarifs disponibles à la vente, définis sur la fiche produit.
 type PriceTier = "VENTE" | "GROSSISTE" | "REVENDEUR" | "PROMOTIONNEL";
@@ -72,6 +73,7 @@ export default function SalesPosPage() {
   const { data: products } = useQuery({ queryKey: ["products"], queryFn: async () => (await api.get<Product[]>("/products")).data });
   const { data: stores } = useQuery({ queryKey: ["stores"], queryFn: async () => (await api.get<Store[]>("/stores")).data });
   const { data: customers } = useQuery({ queryKey: ["customers"], queryFn: async () => (await api.get<Customer[]>("/customers")).data });
+  const { data: company } = useQuery({ queryKey: ["settings"], queryFn: async () => (await api.get<Company>("/settings")).data });
 
   const [search, setSearch] = useState("");
   const [storeId, setStoreId] = useState("");
@@ -205,15 +207,26 @@ export default function SalesPosPage() {
       const { data } = await api.post<Sale>("/sales", payload);
       return data;
     },
-    onSuccess: (sale) => {
+    onSuccess: async (sale) => {
       toast.success(saleType === "DEVIS" ? "Devis créé" : `Vente ${sale.number} enregistrée`);
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["stock"] });
+      queryClient.invalidateQueries({ queryKey: ["sales"] });
       setReceiptSale(sale);
       setCart([]);
       setPayments([newPaymentLine()]);
       setCustomerId("");
+
+      // Impression automatique : vente = bordereau client + reçu magasinier ; devis = proforma.
+      // Si le navigateur bloque l'impression, les boutons de la fenêtre permettent de recommencer.
+      try {
+        const co = company ?? (await api.get<Company>("/settings")).data;
+        if (sale.pickupCode) printSaleBundle(sale, co, sale.pickupCode);
+        else if (sale.type === "DEVIS") printSaleDocument(sale, co);
+      } catch {
+        // l'erreur éventuelle est déjà affichée par l'intercepteur axios
+      }
     },
     onError: (err: any) => {
       // Les erreurs venant du serveur sont déjà affichées par l'intercepteur axios
@@ -463,7 +476,9 @@ export default function SalesPosPage() {
       <Dialog open={!!receiptSale} onOpenChange={(v) => !v && setReceiptSale(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Reçu {receiptSale?.number}</DialogTitle>
+            <DialogTitle>
+              {receiptSale?.deliveryNumber != null ? `Bordereau n° ${formatDeliveryNumber(receiptSale.deliveryNumber)}` : `Reçu ${receiptSale?.number}`}
+            </DialogTitle>
           </DialogHeader>
           {receiptSale && (
             <div className="space-y-2 font-mono text-xs">
@@ -501,12 +516,43 @@ export default function SalesPosPage() {
               )}
             </div>
           )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => window.print()}>
-              <Printer className="h-4 w-4" />
-              Imprimer
+          {receiptSale?.pickupCode && (
+            <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs">
+              <p className="font-semibold">Reçu magasinier</p>
+              <p className="mt-0.5 text-muted-foreground">
+                Remettez-le au client : il le présentera au magasinier pour retirer ses produits. Le code n'est affiché qu'à cet instant ;
+                si vous fermez cette fenêtre sans l'avoir imprimé, il faudra générer un nouveau reçu depuis l'historique des ventes.
+              </p>
+              <p className="mt-2 text-center font-mono text-base font-semibold tracking-widest">{receiptSale.pickupCode.replace(/(.{4})(?=.)/g, "$1-")}</p>
+            </div>
+          )}
+          <DialogFooter className="flex-wrap gap-2 sm:justify-between">
+            {receiptSale && company && (
+              <div className="flex flex-wrap gap-2">
+                {receiptSale.pickupCode ? (
+                  <>
+                    <Button onClick={() => printSaleBundle(receiptSale, company, receiptSale.pickupCode!)}>
+                      <Printer className="h-4 w-4" />
+                      Imprimer les 2 reçus
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => printDeliveryNote(receiptSale, company)}>
+                      Bordereau client
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => printPickupSlip(receiptSale, company, receiptSale.pickupCode!)}>
+                      Reçu magasinier
+                    </Button>
+                  </>
+                ) : (
+                  <Button variant="outline" onClick={() => printSaleDocument(receiptSale, company)}>
+                    <Printer className="h-4 w-4" />
+                    Imprimer
+                  </Button>
+                )}
+              </div>
+            )}
+            <Button variant={receiptSale?.pickupCode ? "outline" : "default"} onClick={() => setReceiptSale(null)}>
+              Fermer
             </Button>
-            <Button onClick={() => setReceiptSale(null)}>Fermer</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
