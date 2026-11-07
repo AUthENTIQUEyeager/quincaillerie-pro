@@ -1,5 +1,6 @@
 import { formatCurrency, formatDate, formatDateTime, formatDeliveryNumber, formatQty, itemUnit, paymentLabel } from "@/lib/utils";
 import { qrSvg } from "@/lib/qr";
+import { getPaperSize, type PaperSize } from "@/lib/paperSize";
 import type { Company, Sale } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -242,23 +243,63 @@ export function buildReceiptHtml(sale: Sale, company: Company): string {
 
 type Parts = { css: string; body: string };
 
-function htmlDocument(title: string, parts: Parts[]): string {
+// Même mise en page sur les deux formats : l'A5 reprend l'A4 avec des marges, textes et lignes plus petits.
+const A5_CSS = `
+  body.a5 { font-size: 10px; }
+  .a5 .bl-name { font-size: 20px; padding: 5px 12px; border-radius: 10px; }
+  .a5 .bl-date { width: 46mm; }
+  .a5 .bl-date th { font-size: 8px; padding: 2px 0; }
+  .a5 .bl-date td { font-size: 13px; padding: 5px 0; }
+  .a5 .bl-head { margin-top: 6px; gap: 10px; }
+  .a5 .bl-logo { width: 26mm; }
+  .a5 .bl-logo img { max-height: 20mm; }
+  .a5 .bl-slogan { font-size: 8px; }
+  .a5 .bl-info { font-size: 10px; line-height: 1.3; }
+  .a5 .bl-info .act { font-size: 10px; margin-bottom: 3px; }
+  .a5 .bl-title { margin: 8px 0 6px; gap: 8px; }
+  .a5 .bl-title h1 { font-size: 15px; }
+  .a5 .bl-num { font-size: 19px; padding: 1px 10px; }
+  .a5 .bl-client { font-size: 12px; padding: 5px 12px; margin-bottom: 6px; border-radius: 10px; }
+  .a5 .bl-table th { font-size: 10px; padding: 5px 4px; }
+  .a5 .bl-table td { font-size: 10.5px; padding: 4px 6px; }
+  .a5 .bl-table tr.empty td { height: 6.5mm; }
+  .a5 .bl-total div { font-size: 13px; padding: 6px 10px; }
+  .a5 .bl-pay { font-size: 9px; }
+  .a5 .bl-footer { font-size: 9px; margin-top: 8px; }
+  .a5 .rm-wrap { padding: 10px 12px; }
+  .a5 .rm-co { font-size: 12px; }
+  .a5 .rm-title { font-size: 17px; }
+  .a5 .rm-sub { font-size: 9px; }
+  .a5 .rm-num { font-size: 17px; padding: 3px 9px; }
+  .a5 .rm-meta { font-size: 10px; gap: 14px; margin: 7px 0; }
+  .a5 .rm-table th { font-size: 9px; padding: 4px 6px; }
+  .a5 .rm-table td { padding: 5px 6px; }
+  .a5 .rm-secure { gap: 12px; margin-top: 10px; padding-top: 9px; }
+  .a5 .rm-qr svg { width: 30mm; height: 30mm; }
+  .a5 .rm-code { font-size: 16px; letter-spacing: 1px; }
+  .a5 .rm-warn { font-size: 8.5px; }
+  .a5 .rm-sign { margin-top: 14px; }`;
+
+function htmlDocument(title: string, parts: Parts[], paper: PaperSize): string {
   const pages = parts.map((p) => `<section class="page">${p.body}</section>`).join("");
+  const a5 = paper === "A5";
   return `<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><title>${esc(title)}</title>
 <style>
-  @page { size: A4; margin: 12mm; }
+  @page { size: ${paper}; margin: ${a5 ? "8mm" : "12mm"}; }
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #111; margin: 0; }
   .page { page-break-after: always; }
   .page:last-child { page-break-after: auto; }
   ${parts.map((p) => p.css).join("\n")}
-</style></head><body>${pages}</body></html>`;
+  ${a5 ? A5_CSS : ""}
+</style></head><body${a5 ? ' class="a5"' : ""}>${pages}</body></html>`;
 }
 
-const BL_MIN_ROWS = 10; // lignes vides ajoutées pour garder l'aspect du carnet papier
+// Lignes vides ajoutées pour garder l'aspect du carnet papier
+const BL_MIN_ROWS: Record<PaperSize, number> = { A4: 10, A5: 6 };
 
-function deliveryNoteParts(sale: Sale, company: Company): Parts {
+function deliveryNoteParts(sale: Sale, company: Company, paper: PaperSize): Parts {
   const cur = company.currency || "XOF";
   const money = (n: number) => esc(formatCurrency(n, cur));
   const d = new Date(sale.createdAt);
@@ -273,7 +314,7 @@ function deliveryNoteParts(sale: Sale, company: Company): Parts {
         <td class="r b">${money(it.total)}</td>
       </tr>`
   );
-  while (rows.length < BL_MIN_ROWS) rows.push(`<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td></tr>`);
+  while (rows.length < BL_MIN_ROWS[paper]) rows.push(`<tr class="empty"><td>&nbsp;</td><td></td><td></td><td></td></tr>`);
 
   const remaining = sale.totalAmount - sale.paidAmount;
   const contact: string[] = [];
@@ -426,29 +467,30 @@ function pickupSlipParts(sale: Sale, company: Company, code: string): Parts {
   return { css, body };
 }
 
-export function buildDeliveryNoteHtml(sale: Sale, company: Company): string {
-  return htmlDocument(`Bordereau de livraison ${formatDeliveryNumber(sale.deliveryNumber) || sale.number}`, [deliveryNoteParts(sale, company)]);
+// `paper` : A4 ou A5. Par défaut, le choix mémorisé sur cet ordinateur (voir PaperSizeSelect).
+export function buildDeliveryNoteHtml(sale: Sale, company: Company, paper: PaperSize = getPaperSize()): string {
+  return htmlDocument(`Bordereau de livraison ${formatDeliveryNumber(sale.deliveryNumber) || sale.number}`, [deliveryNoteParts(sale, company, paper)], paper);
 }
 
-export function buildPickupSlipHtml(sale: Sale, company: Company, code: string): string {
-  return htmlDocument(`Reçu magasinier ${formatDeliveryNumber(sale.deliveryNumber) || sale.number}`, [pickupSlipParts(sale, company, code)]);
+export function buildPickupSlipHtml(sale: Sale, company: Company, code: string, paper: PaperSize = getPaperSize()): string {
+  return htmlDocument(`Reçu magasinier ${formatDeliveryNumber(sale.deliveryNumber) || sale.number}`, [pickupSlipParts(sale, company, code)], paper);
 }
 
 // Les 2 documents d'une vente, en une seule impression : page 1 = bordereau client, page 2 = reçu magasinier.
-export function buildSaleBundleHtml(sale: Sale, company: Company, code: string): string {
-  return htmlDocument(`Vente ${sale.number}`, [deliveryNoteParts(sale, company), pickupSlipParts(sale, company, code)]);
+export function buildSaleBundleHtml(sale: Sale, company: Company, code: string, paper: PaperSize = getPaperSize()): string {
+  return htmlDocument(`Vente ${sale.number}`, [deliveryNoteParts(sale, company, paper), pickupSlipParts(sale, company, code)], paper);
 }
 
-export function printDeliveryNote(sale: Sale, company: Company) {
-  printHtml(buildDeliveryNoteHtml(sale, company));
+export function printDeliveryNote(sale: Sale, company: Company, paper: PaperSize = getPaperSize()) {
+  printHtml(buildDeliveryNoteHtml(sale, company, paper));
 }
 
-export function printPickupSlip(sale: Sale, company: Company, code: string) {
-  printHtml(buildPickupSlipHtml(sale, company, code));
+export function printPickupSlip(sale: Sale, company: Company, code: string, paper: PaperSize = getPaperSize()) {
+  printHtml(buildPickupSlipHtml(sale, company, code, paper));
 }
 
-export function printSaleBundle(sale: Sale, company: Company, code: string) {
-  printHtml(buildSaleBundleHtml(sale, company, code));
+export function printSaleBundle(sale: Sale, company: Company, code: string, paper: PaperSize = getPaperSize()) {
+  printHtml(buildSaleBundleHtml(sale, company, code, paper));
 }
 
 // Devis et bon de livraison : A4 proforma. Vente avec bordereau : bordereau client.

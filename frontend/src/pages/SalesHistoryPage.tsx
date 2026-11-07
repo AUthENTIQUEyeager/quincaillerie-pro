@@ -4,6 +4,7 @@ import { ClipboardList, Ban, Eye, X, Printer, QrCode } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { PageHeader } from "@/components/common/PageHeader";
+import { PaperSizeSelect } from "@/components/common/PaperSizeSelect";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -114,6 +115,7 @@ export default function SalesHistoryPage() {
         description="Consultez et gérez toutes vos ventes"
         actions={
           <div className="flex items-end gap-2">
+            <PaperSizeSelect className="mb-1.5" />
             <div>
               <Label className="mb-1 text-xs">Voir une journée précise</Label>
               <Input type="date" className="h-9" value={dayFilter} onChange={(e) => setDayFilter(e.target.value)} />
