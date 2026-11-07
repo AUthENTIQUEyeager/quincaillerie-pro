@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { formatCurrency, formatDeliveryNumber, formatQty, itemUnit, paymentLabel } from "@/lib/utils";
+import { PaperSizeSelect } from "@/components/common/PaperSizeSelect";
 import { printDeliveryNote, printPickupSlip, printSaleBundle, printSaleDocument } from "@/lib/printDocument";
 import toast from "react-hot-toast";
 import type { Product, Store, Customer, Sale, Company } from "@/types";
@@ -526,6 +527,7 @@ export default function SalesPosPage() {
               <p className="mt-2 text-center font-mono text-base font-semibold tracking-widest">{receiptSale.pickupCode.replace(/(.{4})(?=.)/g, "$1-")}</p>
             </div>
           )}
+          {receiptSale?.deliveryNumber != null && <PaperSizeSelect />}
           <DialogFooter className="flex-wrap gap-2 sm:justify-between">
             {receiptSale && company && (
               <div className="flex flex-wrap gap-2">
