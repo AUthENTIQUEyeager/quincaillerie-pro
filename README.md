@@ -52,11 +52,11 @@ npm run dev          # démarre l'API sur http://localhost:4000
 
 > **Important** : `npx prisma generate` et `npx prisma migrate dev` téléchargent les moteurs binaires de Prisma depuis internet (`binaries.prisma.sh`). Assurez-vous d'avoir un accès internet normal (pas de pare-feu bloquant ce domaine) lors du premier `npm install`.
 
-Comptes créés par le script de seed :
+Comptes créés par le script de seed (**base locale uniquement** : le seed refuse de tourner sur une base distante) :
 
 | Rôle | Email | Mot de passe |
 |---|---|---|
-| Super Admin | superadmin@authentique-studio.com | SuperAdmin@2026 |
+| Super Admin | superadmin@authentique-studio.com | défini par `SUPERADMIN_PASSWORD`, sinon généré au hasard et affiché une seule fois |
 | Propriétaire | proprietaire@quincaillerie.demo | Proprietaire@2026 |
 | Caissier | caissier@quincaillerie.demo | Caissier@2026 |
 

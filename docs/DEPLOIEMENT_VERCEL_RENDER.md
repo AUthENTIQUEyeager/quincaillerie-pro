@@ -60,11 +60,14 @@ Render Dashboard → **New** → **Web Service** → connectez le repo :
 | `CORS_ORIGIN` | URL Vercel (à mettre à jour après l'étape 3) |
 | `PORT` | `4000` |
 
-### Charger les données de démonstration (optionnel)
+### Créer (ou changer le mot de passe du) Super Admin
+Les comptes de démonstration ne doivent **pas** être chargés en production. Pour créer le Super Admin,
 Render Dashboard → votre service → **Shell** :
 ```bash
-npm run render:seed
+SUPERADMIN_PASSWORD="un-mot-de-passe-long-et-unique" npm run render:seed
 ```
+La même commande, relancée, change le mot de passe d'un Super Admin existant (le mot de passe `SuperAdmin@2026`
+publié dans d'anciennes versions du dépôt doit être remplacé ainsi). Le serveur refuse de démarrer en production si `JWT_SECRET` est absent ou trop court.
 
 ---
 

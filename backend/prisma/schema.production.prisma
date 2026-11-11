@@ -180,7 +180,7 @@ model Product {
   company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   name            String
   reference       String?
-  sku             String   @unique
+  sku             String
   barcode         String?
   qrCode          String?
   categoryId      String?
@@ -221,6 +221,8 @@ model Product {
   purchaseItems   PurchaseItem[]
 
   @@index([companyId])
+
+  @@unique([companyId, sku]) // le SKU est unique dans chaque entreprise (deux entreprises peuvent avoir le même)
 }
 
 model ProductImage {
@@ -389,7 +391,7 @@ model Sale {
   customer      Customer? @relation(fields: [customerId], references: [id])
   userId        String
   user          User     @relation(fields: [userId], references: [id])
-  number        String   @unique
+  number        String
   type          String   @default("VENTE") // VENTE, DEVIS, BON_LIVRAISON
   status        String   @default("VALIDEE") // VALIDEE, ANNULEE, RETOURNEE
   subtotal      Float    @default(0)
@@ -410,6 +412,7 @@ model Sale {
   deliveries   Delivery[]
 
   @@unique([companyId, deliveryNumber])
+  @@unique([companyId, number]) // le n° de vente est unique dans chaque entreprise
 }
 
 model SaleItem {
@@ -450,7 +453,7 @@ model Purchase {
   supplier      Supplier @relation(fields: [supplierId], references: [id])
   userId        String
   user          User     @relation(fields: [userId], references: [id])
-  number        String   @unique
+  number        String
   status        String   @default("VALIDEE")
   totalAmount   Float    @default(0)
   paidAmount    Float    @default(0)
@@ -458,6 +461,8 @@ model Purchase {
 
   items    PurchaseItem[]
   payments SupplierPayment[]
+
+  @@unique([companyId, number]) // le n° d'achat est unique dans chaque entreprise
 }
 
 model PurchaseItem {

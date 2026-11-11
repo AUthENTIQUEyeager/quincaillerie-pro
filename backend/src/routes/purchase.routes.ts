@@ -4,6 +4,7 @@ import { prisma } from "../lib/prisma";
 import { requireAuth, requireCompany } from "../middleware/auth";
 import { asyncHandler, AppError } from "../middleware/errorHandler";
 import { pushNotification } from "../lib/notify";
+import { retryOnUniqueClash } from "../lib/retry";
 
 const router = Router();
 router.use(requireAuth, requireCompany);
@@ -63,7 +64,7 @@ router.post(
 
     const totalAmount = data.items.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0);
 
-    const purchase = await prisma.$transaction(async (tx) => {
+    const purchase = await retryOnUniqueClash(() => prisma.$transaction(async (tx) => {
       const number = await generatePurchaseNumber(companyId);
       const created = await tx.purchase.create({
         data: {
@@ -100,7 +101,7 @@ router.post(
       }
 
       return created;
-    });
+    }));
 
     await pushNotification(companyId, "NOUVEL_ACHAT", "Nouvel achat", `Achat ${purchase.number} enregistré pour un total de ${totalAmount}.`);
     res.status(201).json(purchase);

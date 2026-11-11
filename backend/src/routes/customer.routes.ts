@@ -67,6 +67,9 @@ router.delete(
   asyncHandler(async (req, res) => {
     const existing = await prisma.customer.findFirst({ where: { id: req.params.id, ...scope(req) } });
     if (!existing) throw new AppError("Client introuvable.", 404);
+    if (Math.abs(existing.balance) > 0.005) {
+      throw new AppError("Suppression impossible : ce client a un solde non réglé. Encaissez ou régularisez sa dette d'abord.", 409);
+    }
     await prisma.customer.delete({ where: { id: req.params.id } });
     res.status(204).send();
   })
