@@ -28,6 +28,12 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
   if (anyErr?.code === "P2002") {
     return res.status(409).json({ error: "Cette valeur existe déjà (contrainte d'unicité)." });
   }
+  if (anyErr?.code === "P2003") {
+    // Suppression refusée : d'autres enregistrements (ventes, achats, mouvements...) dépendent de cet élément.
+    return res.status(409).json({
+      error: "Suppression impossible : cet élément est utilisé ailleurs (ventes, achats, historique...). Il doit être conservé pour garder l'historique intact.",
+    });
+  }
   if (anyErr?.code === "P2025") {
     return res.status(404).json({ error: "Ressource introuvable." });
   }

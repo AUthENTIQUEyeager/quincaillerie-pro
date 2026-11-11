@@ -86,7 +86,14 @@ router.delete(
   asyncHandler(async (req, res) => {
     const existing = await prisma.user.findFirst({ where: { id: req.params.id, ...scope(req) } });
     if (!existing) throw new AppError("Utilisateur introuvable.", 404);
-    await prisma.user.delete({ where: { id: req.params.id } });
+    try {
+      await prisma.user.delete({ where: { id: req.params.id } });
+    } catch (e: any) {
+      if (e?.code === "P2003") {
+        throw new AppError("Suppression impossible : cet utilisateur a déjà enregistré des ventes ou des opérations. Désactivez son compte à la place (bouton « Désactiver »).", 409);
+      }
+      throw e;
+    }
     res.status(204).send();
   })
 );

@@ -67,6 +67,9 @@ router.delete(
   asyncHandler(async (req, res) => {
     const existing = await prisma.supplier.findFirst({ where: { id: req.params.id, ...scope(req) } });
     if (!existing) throw new AppError("Fournisseur introuvable.", 404);
+    if (Math.abs(existing.balance) > 0.005) {
+      throw new AppError("Suppression impossible : ce fournisseur a un solde non réglé. Réglez la dette d'abord.", 409);
+    }
     await prisma.supplier.delete({ where: { id: req.params.id } });
     res.status(204).send();
   })
