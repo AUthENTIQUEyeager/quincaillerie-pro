@@ -112,7 +112,7 @@ router.post(
     const data = cleanAltUnit(parsed);
     const companyId = req.auth!.companyId!;
 
-    const existingSku = await prisma.product.findUnique({ where: { sku: data.sku } });
+    const existingSku = await prisma.product.findFirst({ where: { companyId, sku: data.sku } });
     if (existingSku) throw new AppError("Ce SKU existe déjà.", 409);
 
     const product = await prisma.$transaction(async (tx) => {
@@ -150,7 +150,7 @@ router.put(
     const data = cleanAltUnit(parsed);
 
     if (data.sku && data.sku !== existing.sku) {
-      const dup = await prisma.product.findUnique({ where: { sku: data.sku } });
+      const dup = await prisma.product.findFirst({ where: { companyId: existing.companyId, sku: data.sku } });
       if (dup) throw new AppError("Ce SKU existe déjà.", 409);
     }
 

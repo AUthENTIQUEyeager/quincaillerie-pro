@@ -5,6 +5,7 @@ import { requireAuth, requireCompany, requireRole } from "../middleware/auth";
 import { asyncHandler, AppError } from "../middleware/errorHandler";
 import { pushNotification } from "../lib/notify";
 import { generatePickupCode, hashPickupCode } from "../lib/pickupCode";
+import { retryOnUniqueClash } from "../lib/retry";
 
 const router = Router();
 router.use(requireAuth, requireCompany);
@@ -141,7 +142,7 @@ router.post(
     // Seule son empreinte est enregistrée (voir lib/pickupCode.ts).
     const pickupCode = isSale ? generatePickupCode() : null;
 
-    const sale = await prisma.$transaction(async (tx) => {
+    const sale = await retryOnUniqueClash(() => prisma.$transaction(async (tx) => {
       // Vérifie et décrémente le stock uniquement pour les ventes réelles (pas devis)
       if (data.type === "VENTE") {
         // Total demandé par produit (un même produit peut figurer sur 2 lignes, ex. sacs + tonne)
@@ -243,7 +244,7 @@ router.post(
           user: { select: { name: true } },
         },
       });
-    });
+    }));
 
     if (data.type === "VENTE") {
       await pushNotification(companyId, "NOUVELLE_VENTE", "Nouvelle vente", `Vente ${sale.number} enregistrée pour un total de ${totalAmount}.`);
