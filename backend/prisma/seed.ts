@@ -1,13 +1,27 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { randomBytes } from "crypto";
 
 const prisma = new PrismaClient();
 
 async function main() {
+  // Ce seed crée des comptes de démonstration aux mots de passe publics (voir le README) :
+  // il est réservé à une base LOCALE (SQLite). Sur la vraie base de production, il refuse de s'exécuter.
+  const dbUrl = process.env.DATABASE_URL || "";
+  if (!dbUrl.startsWith("file:") && process.env.ALLOW_DEMO_SEED !== "true") {
+    console.error(
+      "❌ Seed de démonstration refusé : DATABASE_URL ne pointe pas vers une base locale (file:...).\n" +
+        "   Il créerait des comptes aux mots de passe publics. Pour créer uniquement le Super Admin en production : npm run admin:password"
+    );
+    process.exit(1);
+  }
+
   console.log("🌱 Initialisation des données de démonstration...");
 
-  // --- Super Admin (Authentique-Studio) ---
-  const superAdminPassword = await bcrypt.hash("SuperAdmin@2026", 10);
+  // --- Super Admin (Authentique-Studio) : mot de passe fourni par l'environnement, ou généré au hasard ---
+  const superAdminPlain = process.env.SUPERADMIN_PASSWORD || randomBytes(9).toString("base64url");
+  const generated = !process.env.SUPERADMIN_PASSWORD;
+  const superAdminPassword = await bcrypt.hash(superAdminPlain, 10);
   await prisma.user.upsert({
     where: { email: "superadmin@authentique-studio.com" },
     update: {},
@@ -97,7 +111,11 @@ async function main() {
   console.log("✅ Données de démonstration créées avec succès.");
   console.log("");
   console.log("Comptes de connexion :");
-  console.log("  Super Admin  : superadmin@authentique-studio.com / SuperAdmin@2026");
+  console.log(
+    generated
+      ? `  Super Admin  : superadmin@authentique-studio.com / ${superAdminPlain}   (généré, affiché une seule fois — notez-le)`
+      : "  Super Admin  : superadmin@authentique-studio.com / (mot de passe = variable SUPERADMIN_PASSWORD)"
+  );
   console.log("  Propriétaire : proprietaire@quincaillerie.demo / Proprietaire@2026");
   console.log("  Caissier     : caissier@quincaillerie.demo / Caissier@2026");
 }
