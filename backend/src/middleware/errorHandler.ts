@@ -34,6 +34,10 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
       error: "Suppression impossible : cet élément est utilisé ailleurs (ventes, achats, historique...). Il doit être conservé pour garder l'historique intact.",
     });
   }
+  if (anyErr?.code === "P2028") {
+    // Transaction trop longue ou fermée : rien n'a été enregistré.
+    return res.status(503).json({ error: "L'opération a pris trop de temps et n'a pas été enregistrée. Réessayez." });
+  }
   if (anyErr?.code === "P2025") {
     return res.status(404).json({ error: "Ressource introuvable." });
   }
