@@ -276,7 +276,8 @@ export default function PricesPage() {
       }
 
       next[field] = null;
-    } else if (oldValue !== null && parsed !== oldValue) {
+    } else if (field === "purchasePrice" && oldValue !== null && parsed !== oldValue) {
+      // Seul le prix d'achat entraîne les autres prix (même écart). Modifier un autre prix ne change que lui.
       const delta = parsed - oldValue;
       let clamped = false;
 
@@ -982,6 +983,7 @@ export default function PricesPage() {
 
       <p className="mt-3 text-xs text-muted-foreground">
         Entrée valide le prix et passe à la ligne suivante.
+        Changer le prix d'achat déplace aussi les autres prix du même écart ; changer un autre prix ne modifie que lui.
         Échap annule la saisie en cours. Rien n'est appliqué
         avant « Enregistrer ».
       </p>
