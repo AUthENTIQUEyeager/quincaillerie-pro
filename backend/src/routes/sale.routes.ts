@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma";
 import { requireAuth, requireCompany, requireRole } from "../middleware/auth";
 import { asyncHandler, AppError } from "../middleware/errorHandler";
@@ -38,7 +39,46 @@ function stripSecrets<T extends { pickupCodeHash?: unknown }>(sale: T): Omit<T, 
 // Arrondi pour éviter les dérives du type 0,1 + 0,2 = 0,30000000000000004
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
 
+// Prix minimum d'une ligne = prix revendeur (à défaut, prix de vente normal) pour l'unité vendue.
+function minUnitPrice(product: any, isAlt: boolean, unitFactor: number): number {
+  const base = product.resellerPrice ?? null;
+  if (!isAlt) return base ?? product.sellingPrice;
+  if (base !== null) return base * unitFactor;
+  return product.altSellingPrice ?? product.sellingPrice * unitFactor;
+}
+
+// Seuls le patron et le gérant peuvent vendre sous le prix minimum ; un caissier a besoin de l'accord d'un
+// d'eux (identifiants saisis sur la caisse). Freine les essais de mots de passe au hasard.
+const approvalFails = new Map<string, { count: number; resetAt: number }>();
+async function verifyPriceApproval(companyId: string, requesterId: string, approval?: { email: string; password: string }) {
+  const refuse = (msg: string): never => {
+    throw new AppError(msg, 403);
+  };
+  if (!approval) {
+    return refuse("Prix en dessous du minimum autorisé : l'accord d'un gérant ou du propriétaire est nécessaire.");
+  }
+  const now = Date.now();
+  const rec = approvalFails.get(requesterId);
+  if (rec && rec.resetAt > now && rec.count >= 5) {
+    throw new AppError("Trop d'essais d'autorisation. Patientez quelques minutes.", 429);
+  }
+  const approver = await prisma.user.findFirst({
+    where: { email: approval.email.trim(), companyId, isActive: true, role: { in: ["PROPRIETAIRE", "GERANT"] } },
+  });
+  const ok = approver ? await bcrypt.compare(approval.password, approver.passwordHash) : false;
+  if (!ok || !approver) {
+    const cur = rec && rec.resetAt > now ? rec : { count: 0, resetAt: now + 10 * 60 * 1000 };
+    cur.count += 1;
+    approvalFails.set(requesterId, cur);
+    return refuse("Autorisation refusée : identifiants du gérant ou du propriétaire incorrects.");
+  }
+  approvalFails.delete(requesterId);
+  return approver;
+}
+
 const saleSchema = z.object({
+  // Accord d'un gérant/propriétaire pour vendre sous le prix minimum (voir verifyPriceApproval)
+  approval: z.object({ email: z.string().email(), password: z.string().min(1).max(200) }).optional(),
   storeId: z.string(),
   customerId: z.string().optional().nullable(),
   type: z.enum(["VENTE", "DEVIS", "BON_LIVRAISON"]).default("VENTE"),
@@ -122,6 +162,15 @@ router.post(
     const subtotal = items.reduce((sum, it) => sum + it.quantity * it.unitPrice - it.discount, 0);
     const totalAmount = Math.max(subtotal - data.discount, 0);
 
+    // Prix minimum : somme des prix revendeur (à défaut prix de vente) de toutes les lignes.
+    // En dessous, seul un gérant/propriétaire peut valider (ou un caissier avec leur accord).
+    const minimumTotal = items.reduce((sum, it) => sum + it.quantity * minUnitPrice(productById.get(it.productId), !!it.unit, it.unitFactor), 0);
+    let approvedBy: string | null = null;
+    if (totalAmount < minimumTotal - 0.01 && !["PROPRIETAIRE", "GERANT", "SUPER_ADMIN"].includes(req.auth!.role)) {
+      const approver = await verifyPriceApproval(companyId, req.auth!.userId, data.approval);
+      approvedBy = approver.name;
+    }
+
     // Tranches de paiement : nouveau format (payments[]) ou ancien format (un seul montant + un seul mode)
     const isSale = data.type === "VENTE";
     const paymentLines: { method: string; amount: number }[] = !isSale
@@ -142,23 +191,12 @@ router.post(
     // Seule son empreinte est enregistrée (voir lib/pickupCode.ts).
     const pickupCode = isSale ? generatePickupCode() : null;
 
+    let negativeProducts: string[] = [];
+
     const sale = await retryOnUniqueClash(() => prisma.$transaction(async (tx) => {
-      // Vérifie et décrémente le stock uniquement pour les ventes réelles (pas devis)
-      if (data.type === "VENTE") {
-        // Total demandé par produit (un même produit peut figurer sur 2 lignes, ex. sacs + tonne)
-        const needed = new Map<string, number>();
-        for (const item of items) needed.set(item.productId, round3((needed.get(item.productId) ?? 0) + item.baseQty));
-        for (const [productId, qty] of needed) {
-          const stock = await tx.stock.findUnique({ where: { productId_storeId: { productId, storeId: data.storeId } } });
-          if (!stock || stock.quantity < qty - 1e-9) {
-            const product = productById.get(productId);
-            throw new AppError(
-              `Stock insuffisant pour "${product?.name ?? productId}" (demandé : ${qty} ${product?.unit ?? ""}, disponible : ${round3(stock?.quantity ?? 0)}).`,
-              400
-            );
-          }
-        }
-      }
+      // Vente sans stock suffisant autorisée (la quincaillerie va vite : une entrée peut ne pas être encore saisie).
+      // Le stock devient négatif et sera compensé automatiquement par la prochaine entrée.
+      negativeProducts = [];
 
       const number = await generateSaleNumber(companyId);
 
@@ -206,14 +244,28 @@ router.post(
 
       if (data.type === "VENTE") {
         for (const item of items) {
-          await tx.stock.update({
+          // upsert : un produit qui n'a encore jamais eu de ligne de stock dans ce dépôt peut quand même être vendu.
+          const st = await tx.stock.upsert({
             where: { productId_storeId: { productId: item.productId, storeId: data.storeId } },
             // Le stock disponible baisse tout de suite (plus vendable) mais le produit est seulement
             // « réservé » : il ne quitte le magasin qu'à la remise validée par le magasinier.
-            data: { quantity: { decrement: item.baseQty }, reserved: { increment: item.baseQty } },
+            update: { quantity: { decrement: item.baseQty }, reserved: { increment: item.baseQty } },
+            create: { productId: item.productId, storeId: data.storeId, quantity: -item.baseQty, reserved: item.baseQty },
           });
+          const negative = st.quantity < -1e-9;
+          if (negative) negativeProducts.push(productById.get(item.productId)?.name ?? item.productId);
           await tx.stockMovement.create({
-            data: { productId: item.productId, storeId: data.storeId, type: "VENTE", quantity: -item.baseQty, reason: "Réservé pour le client jusqu'à la remise au magasin", reference: created.number, userId: req.auth!.userId },
+            data: {
+              productId: item.productId,
+              storeId: data.storeId,
+              type: "VENTE",
+              quantity: -item.baseQty,
+              reason: negative
+                ? "Vendu sans stock suffisant : stock négatif, compensé par la prochaine entrée"
+                : "Réservé pour le client jusqu'à la remise au magasin",
+              reference: created.number,
+              userId: req.auth!.userId,
+            },
           });
         }
 
@@ -248,6 +300,14 @@ router.post(
 
     if (data.type === "VENTE") {
       await pushNotification(companyId, "NOUVELLE_VENTE", "Nouvelle vente", `Vente ${sale.number} enregistrée pour un total de ${totalAmount}.`);
+    }
+
+    if (approvedBy && data.type !== "DEVIS") {
+      await pushNotification(companyId, "PRIX_MINIMUM", "Vente sous le prix minimum", `Vente ${sale.number} (total ${totalAmount}, minimum ${minimumTotal}) autorisée par ${approvedBy}.`);
+    }
+    if (negativeProducts.length) {
+      const names = [...new Set(negativeProducts)].join(", ");
+      await pushNotification(companyId, "STOCK_NEGATIF", "Stock négatif", `Vente ${sale.number} : stock insuffisant pour ${names}. Pensez à saisir l'entrée correspondante.`);
     }
 
     // Le code secret n'est renvoyé qu'à cet instant (il sert à imprimer le reçu magasinier).
