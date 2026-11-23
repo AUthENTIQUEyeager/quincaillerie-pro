@@ -152,7 +152,7 @@ export function buildProformaHtml(sale: Sale, company: Company): string {
   </table>
   <div class="totals">
     <div><span>Sous-total</span><span>${money(sale.subtotal)}</span></div>
-    ${sale.discount > 0 ? `<div><span>Remise</span><span>- ${money(sale.discount)}</span></div>` : ""}
+    ${sale.discount > 0 ? `<div><span>Remise</span><span>- ${money(sale.discount)}</span></div>` : sale.discount < 0 ? `<div><span>Majoration</span><span>+ ${money(-sale.discount)}</span></div>` : ""}
     <div class="grand"><span>TOTAL</span><span>${money(sale.totalAmount)}</span></div>
   </div>
   ${sale.type === "DEVIS" ? `<p class="note">Ce devis proforma ne constitue pas une facture. Les prix peuvent évoluer ; le stock n'est pas réservé tant que la vente n'est pas validée.</p>` : ""}
@@ -218,7 +218,7 @@ export function buildReceiptHtml(sale: Sale, company: Company): string {
   <div class="sep"></div>
   ${items}
   <div class="sep"></div>
-  ${sale.discount > 0 ? `<div class="row"><span>Remise</span><span>- ${money(sale.discount)}</span></div>` : ""}
+  ${sale.discount > 0 ? `<div class="row"><span>Remise</span><span>- ${money(sale.discount)}</span></div>` : sale.discount < 0 ? `<div class="row"><span>Majoration</span><span>+ ${money(-sale.discount)}</span></div>` : ""}
   <div class="row total"><span>TOTAL</span><span>${money(sale.totalAmount)}</span></div>
   ${
     sale.type === "VENTE"

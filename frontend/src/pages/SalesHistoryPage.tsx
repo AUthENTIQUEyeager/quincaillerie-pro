@@ -286,8 +286,8 @@ export default function SalesHistoryPage() {
                   <span className="tabular-nums">{formatCurrency(detail.subtotal, currency)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Remise</span>
-                  <span className="tabular-nums">{formatCurrency(detail.discount, currency)}</span>
+                  <span className="text-muted-foreground">{detail.discount < 0 ? "Majoration" : "Remise"}</span>
+                  <span className="tabular-nums">{formatCurrency(Math.abs(detail.discount), currency)}</span>
                 </div>
                 <div className="flex justify-between font-semibold">
                   <span>Total</span>

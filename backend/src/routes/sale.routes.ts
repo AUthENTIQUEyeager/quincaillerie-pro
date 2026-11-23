@@ -83,7 +83,8 @@ const saleSchema = z.object({
   customerId: z.string().optional().nullable(),
   type: z.enum(["VENTE", "DEVIS", "BON_LIVRAISON"]).default("VENTE"),
   items: z.array(saleItemSchema).min(1),
-  discount: z.number().min(0).default(0),
+  // Ajustement du total : positif = remise, négatif = majoration (total saisi au-dessus du prix normal)
+  discount: z.number().finite().default(0),
   paidAmount: z.number().min(0).default(0),
   paymentMethod: z.enum(["ESPECES", "MOBILE_MONEY", "CARTE", "VIREMENT", "MIXTE"]).default("ESPECES"),
   // Paiement en plusieurs tranches (ex. espèces + mobile money). Prioritaire sur paidAmount/paymentMethod.
