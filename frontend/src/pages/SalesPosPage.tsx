@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Search, Plus, Minus, Trash2, ShoppingCart, User, Printer } from "lucide-react";
 import { api } from "@/lib/api";
@@ -175,7 +175,14 @@ export default function SalesPosPage() {
   const cartHasInvalidQty = cart.some((l) => qtyError(l) !== null);
 
   const subtotal = cart.reduce((sum, l) => sum + qtyOf(l) * l.unitPrice - l.discount, 0);
-  const total = subtotal;
+  // Total à facturer : par défaut le total au prix normal, mais la caissière peut le saisir directement
+  // (plus haut sans limite, plus bas jusqu'au minimum = somme des prix revendeur).
+  const [customTotal, setCustomTotal] = useState("");
+  useEffect(() => setCustomTotal(""), [cart]);
+  const customParsed = customTotal.trim() === "" ? null : Number(customTotal.replace(/\s/g, "").replace(",", "."));
+  const customInvalid = customParsed !== null && (!Number.isFinite(customParsed) || customParsed < 0);
+  const total = customParsed !== null && !customInvalid ? customParsed : subtotal;
+  const adjustment = subtotal - total; // > 0 : remise ; < 0 : majoration
   const minimumTotal = cart.reduce((sum, l) => sum + minLineTotal(l), 0);
   const belowMinimum = cart.length > 0 && total < minimumTotal - 0.01;
   const canSellBelowMinimum = role === "PROPRIETAIRE" || role === "GERANT" || role === "SUPER_ADMIN";
@@ -221,7 +228,7 @@ export default function SalesPosPage() {
         customerId: customerId || null,
         type: saleType,
         items: cart.map((l) => ({ productId: l.product.id, quantity: qtyOf(l), unit: l.unit, unitPrice: l.unitPrice, discount: l.discount })),
-        discount: 0,
+        discount: Math.round(adjustment * 100) / 100,
         paidAmount: lines.reduce((sum, l) => sum + l.amount, 0),
         payments: lines,
         ...(approval ? { approval } : {}),
@@ -400,10 +407,33 @@ export default function SalesPosPage() {
                   <span className="text-muted-foreground">Sous-total</span>
                   <span className="font-medium tabular-nums">{formatCurrency(subtotal, currency)}</span>
                 </div>
-                <div className="flex justify-between font-display text-base font-semibold">
-                  <span>Total</span>
-                  <span className="tabular-nums">{formatCurrency(total, currency)}</span>
+                {cart.length > 0 && (
+                  <div className="rounded-md bg-secondary/50 p-2 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Total au prix normal</span>
+                      <span className="font-medium tabular-nums">{formatCurrency(subtotal, currency)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Minimum à ne pas descendre en dessous (somme des prix revendeur)</span>
+                      <span className="ml-2 shrink-0 font-semibold tabular-nums">{formatCurrency(minimumTotal, currency)}</span>
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center justify-between gap-2 font-display text-base font-semibold">
+                  <span>Total à facturer</span>
+                  <Input
+                    type="text"
+                    inputMode="decimal"
+                    value={customTotal}
+                    onChange={(e) => setCustomTotal(e.target.value)}
+                    onFocus={(e) => e.target.select()}
+                    placeholder={String(subtotal)}
+                    aria-label="Total à facturer"
+                    className={"h-9 w-36 text-right tabular-nums " + (customInvalid ? "border-destructive" : belowMinimum ? "border-warning" : "")}
+                    disabled={!cart.length}
+                  />
                 </div>
+                {customInvalid && <p className="text-xs font-medium text-destructive">Montant invalide.</p>}
               </div>
 
               <div className="mt-4 space-y-3">
@@ -491,12 +521,12 @@ export default function SalesPosPage() {
 
                 {belowMinimum && (
                   <p className="rounded-md bg-warning/10 p-2 text-xs font-medium text-warning">
-                    Total sous le minimum autorisé ({formatCurrency(minimumTotal, currency)}, somme des prix revendeur).{" "}
+                    Total sous le minimum autorisé ({formatCurrency(minimumTotal, currency)}).{" "}
                     {needsApproval ? "L'accord d'un gérant ou du propriétaire sera demandé." : "Vous pouvez valider (gérant/propriétaire)."}
                   </p>
                 )}
 
-                <Button className="w-full" size="lg" disabled={!cart.length || cartHasInvalidQty || (saleType === "VENTE" && (overpaid || hasInvalidAmount))} loading={createSale.isPending} onClick={() => (needsApproval ? setApprovalOpen(true) : createSale.mutate(undefined))}>
+                <Button className="w-full" size="lg" disabled={!cart.length || cartHasInvalidQty || customInvalid || (saleType === "VENTE" && (overpaid || hasInvalidAmount))} loading={createSale.isPending} onClick={() => (needsApproval ? setApprovalOpen(true) : createSale.mutate(undefined))}>
                   {saleType === "DEVIS" ? "Créer le devis" : "Valider la vente"}
                 </Button>
               </div>
