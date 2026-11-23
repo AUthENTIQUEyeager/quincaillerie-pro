@@ -408,13 +408,14 @@ export default function SalesPosPage() {
                   <span className="font-medium tabular-nums">{formatCurrency(subtotal, currency)}</span>
                 </div>
                 {cart.length > 0 && (
-                  <div className="rounded-md bg-secondary/50 p-2 text-xs">
+                  <div className="space-y-1 rounded-md bg-secondary/50 p-2 text-xs">
+                    <p className="font-medium text-muted-foreground">Le total à facturer doit être entre ces deux montants (ou au-dessus du premier) :</p>
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Total au prix normal</span>
-                      <span className="font-medium tabular-nums">{formatCurrency(subtotal, currency)}</span>
+                      <span>Somme des prix sélectionnés (vente, revendeur, promo...)</span>
+                      <span className="ml-2 shrink-0 font-semibold tabular-nums">{formatCurrency(subtotal, currency)}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Minimum à ne pas descendre en dessous (somme des prix revendeur)</span>
+                      <span>Somme des prix revendeur = minimum, pas en dessous</span>
                       <span className="ml-2 shrink-0 font-semibold tabular-nums">{formatCurrency(minimumTotal, currency)}</span>
                     </div>
                   </div>
