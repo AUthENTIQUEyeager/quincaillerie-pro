@@ -60,6 +60,17 @@ function qtyOf(l: CartLine): number {
 function baseQtyOf(l: CartLine): number {
   return round3(qtyOf(l) * (l.unit ? l.product.altUnitFactor ?? 1 : 1));
 }
+// Prix minimum d'une ligne : prix revendeur (à défaut prix de vente normal) pour l'unité vendue.
+function minLineTotal(l: CartLine): number {
+  const p = l.product;
+  const factor = p.altUnitFactor ?? 1;
+  const unitMin = l.unit
+    ? p.resellerPrice != null
+      ? p.resellerPrice * factor
+      : altPrice(p)
+    : p.resellerPrice ?? p.sellingPrice;
+  return qtyOf(l) * unitMin;
+}
 function qtyError(l: CartLine): string | null {
   const q = qtyOf(l);
   if (q <= 0) return "Quantité invalide";
@@ -85,6 +96,11 @@ export default function SalesPosPage() {
   const [payments, setPayments] = useState<PaymentLine[]>(() => [newPaymentLine()]);
   const [saleType, setSaleType] = useState<"VENTE" | "DEVIS">("VENTE");
   const [receiptSale, setReceiptSale] = useState<Sale | null>(null);
+  // Accord d'un gérant/propriétaire pour vendre sous le prix minimum
+  const role = useAuthStore((s) => s.user?.role);
+  const [approvalOpen, setApprovalOpen] = useState(false);
+  const [approvalEmail, setApprovalEmail] = useState("");
+  const [approvalPassword, setApprovalPassword] = useState("");
 
   const effectiveStoreId = storeId || stores?.[0]?.id || "";
 
@@ -160,6 +176,10 @@ export default function SalesPosPage() {
 
   const subtotal = cart.reduce((sum, l) => sum + qtyOf(l) * l.unitPrice - l.discount, 0);
   const total = subtotal;
+  const minimumTotal = cart.reduce((sum, l) => sum + minLineTotal(l), 0);
+  const belowMinimum = cart.length > 0 && total < minimumTotal - 0.01;
+  const canSellBelowMinimum = role === "PROPRIETAIRE" || role === "GERANT" || role === "SUPER_ADMIN";
+  const needsApproval = belowMinimum && !canSellBelowMinimum;
 
   // Montants saisis. Une seule ligne laissée vide = le client paie le total (comportement habituel).
   const parsedAmounts = payments.map((p) => (p.amount.trim() === "" ? 0 : Number(p.amount.replace(",", "."))));
@@ -182,7 +202,7 @@ export default function SalesPosPage() {
   }
 
   const createSale = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (approval?: { email: string; password: string }) => {
       if (cartHasInvalidQty) throw new Error("Une quantité est invalide (vérifiez les lignes en rouge).");
       if (saleType === "VENTE") {
         if (hasInvalidAmount) throw new Error("Un montant de paiement est invalide.");
@@ -204,6 +224,7 @@ export default function SalesPosPage() {
         discount: 0,
         paidAmount: lines.reduce((sum, l) => sum + l.amount, 0),
         payments: lines,
+        ...(approval ? { approval } : {}),
       };
       const { data } = await api.post<Sale>("/sales", payload);
       return data;
@@ -215,6 +236,9 @@ export default function SalesPosPage() {
       queryClient.invalidateQueries({ queryKey: ["stock"] });
       queryClient.invalidateQueries({ queryKey: ["sales"] });
       setReceiptSale(sale);
+      setApprovalOpen(false);
+      setApprovalEmail("");
+      setApprovalPassword("");
       setCart([]);
       setPayments([newPaymentLine()]);
       setCustomerId("");
@@ -349,8 +373,8 @@ export default function SalesPosPage() {
                         </div>
                         {err && <p className="text-xs font-medium text-destructive">{err}</p>}
                         {!err && overStock && saleType === "VENTE" && (
-                          <p className="text-xs font-medium text-destructive">
-                            Stock insuffisant : {formatQty(stockDemand.get(l.product.id) ?? 0)} {l.product.unit} demandés, {formatQty(l.product.totalStock ?? 0)} disponibles.
+                          <p className="text-xs font-medium text-warning">
+                            Stock insuffisant : {formatQty(stockDemand.get(l.product.id) ?? 0)} {l.product.unit} demandés, {formatQty(l.product.totalStock ?? 0)} disponibles. La vente reste possible : le stock passera en négatif jusqu'à la prochaine entrée.
                           </p>
                         )}
                         {l.unit === null && (
@@ -465,7 +489,14 @@ export default function SalesPosPage() {
                   </>
                 )}
 
-                <Button className="w-full" size="lg" disabled={!cart.length || cartHasInvalidQty || (saleType === "VENTE" && (overpaid || hasInvalidAmount))} loading={createSale.isPending} onClick={() => createSale.mutate()}>
+                {belowMinimum && (
+                  <p className="rounded-md bg-warning/10 p-2 text-xs font-medium text-warning">
+                    Total sous le minimum autorisé ({formatCurrency(minimumTotal, currency)}, somme des prix revendeur).{" "}
+                    {needsApproval ? "L'accord d'un gérant ou du propriétaire sera demandé." : "Vous pouvez valider (gérant/propriétaire)."}
+                  </p>
+                )}
+
+                <Button className="w-full" size="lg" disabled={!cart.length || cartHasInvalidQty || (saleType === "VENTE" && (overpaid || hasInvalidAmount))} loading={createSale.isPending} onClick={() => (needsApproval ? setApprovalOpen(true) : createSale.mutate(undefined))}>
                   {saleType === "DEVIS" ? "Créer le devis" : "Valider la vente"}
                 </Button>
               </div>
@@ -556,6 +587,40 @@ export default function SalesPosPage() {
               Fermer
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={approvalOpen} onOpenChange={(o) => !createSale.isPending && setApprovalOpen(o)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Accord du gérant ou du propriétaire</DialogTitle>
+          </DialogHeader>
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              createSale.mutate({ email: approvalEmail, password: approvalPassword });
+            }}
+          >
+            <p className="text-sm text-muted-foreground">
+              Le total ({formatCurrency(total, currency)}) est sous le minimum ({formatCurrency(minimumTotal, currency)}). Un gérant ou le propriétaire doit saisir ses identifiants pour valider.
+            </p>
+            <div>
+              <Label>Email du gérant / propriétaire</Label>
+              <Input type="email" autoComplete="off" value={approvalEmail} onChange={(e) => setApprovalEmail(e.target.value)} required />
+            </div>
+            <div>
+              <Label>Mot de passe</Label>
+              <Input type="password" autoComplete="off" value={approvalPassword} onChange={(e) => setApprovalPassword(e.target.value)} required />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setApprovalOpen(false)}>
+                Annuler
+              </Button>
+              <Button type="submit" loading={createSale.isPending}>
+                Autoriser et valider
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>
